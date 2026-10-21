@@ -1,0 +1,41 @@
+# ── Python / Backend ──────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# ── Environment / Secrets ──────────────────────
+.env
+*.env
+!.env.example
+
+# ── Node / Frontend ────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ── Uploads folder (runtime, not source) ───────
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# ── OS / Editor ────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs ───────────────────────────────────────
+*.log
+npm-debug.log*

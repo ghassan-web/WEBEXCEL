@@ -158,6 +158,9 @@ def run_reconciliation(
         # Ensure the primary key column exists in each row
         if pk not in data:
             data[pk] = r.primary_key_value
+        # Inject cedant from dedicated column if not already present in row_data
+        if r.cedant and not any(k.lower() == "cedant" for k in data):
+            data["cedant"] = r.cedant
         master_records.append(data)
 
     df_master = pd.DataFrame(master_records).astype(str)

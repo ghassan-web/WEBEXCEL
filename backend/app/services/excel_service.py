@@ -31,15 +31,65 @@ def _row_to_dict(series: pd.Series) -> dict:
     return {k: _sanitize(v) for k, v in series.items()}
 
 
+def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 10) -> int:
+    """
+    Scan the first `max_scan` rows to find the best header row.
+
+    A row is considered a valid header when the majority of its non-empty
+    cells do NOT look like pandas auto-generated names ("Unnamed: N") and
+    the row itself is not a single merged-cell title spanning the whole sheet.
+
+    Returns the 0-based row index to pass to pd.read_excel(header=...).
+    """
+    # Read without a header so every row is plain data
+    raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
+                        header=None, dtype=str, nrows=max_scan)
+    raw = raw.fillna("")
+
+    best_row  = 0
+    best_score = -1
+
+    for i, row in raw.iterrows():
+        values = [str(v).strip() for v in row if str(v).strip() != ""]
+        if not values:
+            continue
+
+        # Score = number of non-empty, non-"Unnamed" cells
+        named = [v for v in values
+                 if not v.startswith("Unnamed:") and v not in ("nan", "None")]
+        score = len(named)
+
+        # Penalise rows that look like a single merged title
+        # (only one distinct non-empty value, or that value looks like a company name)
+        distinct = len(set(named))
+        if distinct <= 1 and len(values) >= 3:
+            score = 0
+
+        if score > best_score:
+            best_score = score
+            best_row   = i
+
+    return int(best_row)
+
+
 def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
     """
     Read an Excel file into a DataFrame.
     If sheet_name is None, the first sheet is used.
+
+    Auto-detects the real header row to handle files where the first row(s)
+    are merged title cells (e.g. company name banners) rather than column names.
+
     Returns (df, actual_sheet_name).
     """
     xls = pd.ExcelFile(BytesIO(file_bytes))
     target = sheet_name if sheet_name and sheet_name in xls.sheet_names else xls.sheet_names[0]
-    df = pd.read_excel(BytesIO(file_bytes), sheet_name=target, dtype=str)
+
+    # Auto-detect header row
+    header_row = _find_header_row(file_bytes, target)
+
+    df = pd.read_excel(BytesIO(file_bytes), sheet_name=target,
+                       header=header_row, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
     # Drop completely empty rows
     df.dropna(how="all", inplace=True)
@@ -380,8 +430,14 @@ def ingest_excel(
     df, actual_sheet = _read_excel(file_bytes, sheet_name)
 
     if primary_key_col not in df.columns:
+        # Try case-insensitive match as a fallback hint
+        lower_map = {c.lower(): c for c in df.columns}
+        hint = lower_map.get(primary_key_col.lower())
+        hint_msg = (
+            f" (Mungkin maksud Anda: '{hint}'?)" if hint else ""
+        )
         raise ValueError(
-            f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file. "
+            f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file.{hint_msg} "
             f"Kolom tersedia: {list(df.columns)}"
         )
 

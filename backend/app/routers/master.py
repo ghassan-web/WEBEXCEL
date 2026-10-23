@@ -88,6 +88,8 @@ async def upload_to_master(
         if r["pk"] in existing_pks:
             skipped += 1
             continue
+        # Inject sheet_name into each row so it's available downstream (e.g. OSCLN reconcile)
+        r["data"].setdefault("sheet", result["sheet"])
         batch.append(MasterData(
             tipe_data=tipe_data,
             bulan=bulan,

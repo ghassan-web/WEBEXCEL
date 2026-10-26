@@ -56,9 +56,16 @@ const CEDANT_MAP = [
   { value: "SOMPO (CLAIM)",     label: "SOMPO — CLAIM / AEGS",             key: "Cross Reference",         hint: "Kolom: Cross Reference (sheet CLAIM/AEGS)" },
   { value: "SOMPO (OS D/I)",    label: "SOMPO — OS, D/I",                  key: "Ref No.",                 hint: "Kolom: Ref No. (sheet OS D/I)" },
   { value: "SOMPO (CLAIM-OS)",  label: "SOMPO — CLAIM (Outstanding)",      key: "RefNo",                   hint: "Kolom: RefNo (sheet CLAIM outstanding)" },
-  { value: "TOKIO MARINE",      label: "TOKIO MARINE",                     key: "CLAIM NO",                hint: "Kolom: CLAIM NO" },
+  { value: "TOKIO MARINE",      label: "TOKIO MARINE",                     key: "CLAIM NO.",               hint: "Kolom: CLAIM NO." },
   { value: "TRIPA",             label: "TRIPA",                            key: "DocNo",                   hint: "Kolom: DocNo" },
-  { value: "VIDEI",             label: "VIDEI",                            key: "No. DLA",                 hint: "Kolom: No. DLA" },
+  { value: "UMUM MEGA",         label: "UMUM MEGA",                        key: "REFNO",                   hint: "Kolom: REFNO" },
+  { value: "TRINITY RE (BROKER)",label: "TRINITY RE (BROKER)",             key: "Trinity Claim Reff.",     hint: "Kolom: Trinity Claim Reff." },
+  { value: "TPI",               label: "TPI",                              key: "Claim Number",            hint: "Kolom: Claim Number " },
+  { value: "SAMSUNG TUGU",      label: "SAMSUNG TUGU",                     key: "INVOICE NO",              hint: "Kolom: INVOICE NO" },
+  { value: "RAMAYANA",          label: "RAMAYANA",                         key: "NO. DLA",                 hint: "Kolom: NO. DLA" },
+  { value: "MURE (BROKER)",     label: "MURE (BROKER)",                    key: "No Claim MURE",           hint: "Kolom: No Claim MURE" },
+  { value: "MPM ",              label: "MPM ",                      key: "Name\nRef No.",            hint: "Kolom: Name\nRef No.  " },
+  { value: "VIDEI",             label: "VIDEI",                            key: "No DLA",                  hint: "Kolom: No DLA" },
 ];
 
 /* ─── Upload steps guide ─────────────────────────────── */

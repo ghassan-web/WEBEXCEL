@@ -31,22 +31,34 @@ def _row_to_dict(series: pd.Series) -> dict:
     return {k: _sanitize(v) for k, v in series.items()}
 
 
-def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 10) -> int:
+def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 15) -> int:
     """
     Scan the first `max_scan` rows to find the best header row.
 
-    A row is considered a valid header when the majority of its non-empty
-    cells do NOT look like pandas auto-generated names ("Unnamed: N") and
-    the row itself is not a single merged-cell title spanning the whole sheet.
+    Strategy (priority order):
+    1. Prefer rows where cells look like column headers:
+       - contain typical header keywords (Code, No, Ref, Name, Date, Amount, etc.)
+       - have many distinct non-empty string values (not numbers)
+       - NOT a single merged title (only 1 distinct value across many cells)
+    2. Fall back to the row with the most named (non-Unnamed) cells.
 
     Returns the 0-based row index to pass to pd.read_excel(header=...).
     """
-    # Read without a header so every row is plain data
+    import re
+
+    # Keywords commonly found in header rows (case-insensitive)
+    HEADER_KEYWORDS = re.compile(
+        r'\b(no|code|ref|name|date|amount|curr|type|id|pol|claim|loss|'
+        r'cedant|broker|dol|cob|aging|idr|usd|total|outstanding|balance|'
+        r'status|remark|note|sheet|periode|bulan|tahun|kode|tanggal|jumlah)\b',
+        re.IGNORECASE
+    )
+
     raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
                         header=None, dtype=str, nrows=max_scan)
     raw = raw.fillna("")
 
-    best_row  = 0
+    best_row   = 0
     best_score = -1
 
     for i, row in raw.iterrows():
@@ -54,16 +66,27 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 10) -> 
         if not values:
             continue
 
-        # Score = number of non-empty, non-"Unnamed" cells
-        named = [v for v in values
-                 if not v.startswith("Unnamed:") and v not in ("nan", "None")]
-        score = len(named)
+        named = [v for v in values if v not in ("nan", "None", "")]
 
-        # Penalise rows that look like a single merged title
-        # (only one distinct non-empty value, or that value looks like a company name)
+        # Count cells that match header-keyword pattern
+        keyword_hits = sum(1 for v in named if HEADER_KEYWORDS.search(v))
+
+        # Count cells that are purely numeric (bad for headers)
+        numeric_cells = sum(1 for v in named if re.fullmatch(r'[\d,.\-]+', v))
+
+        # Count distinct values — headers should all be distinct
         distinct = len(set(named))
-        if distinct <= 1 and len(values) >= 3:
+
+        # Penalise: single merged title (1 distinct value across ≥3 cells)
+        if distinct <= 1 and len(named) >= 3:
+            continue  # skip title rows entirely
+
+        # Penalise: row is mostly numbers (likely a data row)
+        if len(named) > 0 and numeric_cells / len(named) > 0.6:
             score = 0
+        else:
+            # Favour: many keyword hits + many distinct values + few numbers
+            score = (keyword_hits * 3) + distinct - numeric_cells
 
         if score > best_score:
             best_score = score
@@ -420,41 +443,93 @@ def ingest_excel(
     """
     Read one Excel file and return its rows ready for Master append.
 
+    If sheet_name is specified, use that sheet only.
+    If sheet_name is None, auto-scan ALL sheets and collect rows from every
+    sheet that contains primary_key_col — merging them into one result.
+    This handles files like AON (Broker) where data is split across
+    Property / Marine / MV&Misc / Facultative / etc. sheets.
+
     Returns:
     {
-        "sheet": str,
+        "sheet": str,          # comma-joined list of sheets that matched
         "total_rows": int,
         "rows": [{"pk": str, "data": {col: val, ...}}, ...]
     }
     """
-    df, actual_sheet = _read_excel(file_bytes, sheet_name)
+    xls = pd.ExcelFile(BytesIO(file_bytes))
+    all_sheet_names = xls.sheet_names
 
-    if primary_key_col not in df.columns:
-        # Try case-insensitive match as a fallback hint
-        lower_map = {c.lower(): c for c in df.columns}
-        hint = lower_map.get(primary_key_col.lower())
-        hint_msg = (
-            f" (Mungkin maksud Anda: '{hint}'?)" if hint else ""
-        )
+    # ── Case A: specific sheet requested ──────────────────────────────────
+    if sheet_name:
+        df, actual_sheet = _read_excel(file_bytes, sheet_name)
+        if primary_key_col not in df.columns:
+            lower_map = {c.lower(): c for c in df.columns}
+            hint = lower_map.get(primary_key_col.lower())
+            hint_msg = f" (Mungkin maksud Anda: '{hint}'?)" if hint else ""
+            raise ValueError(
+                f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di sheet '{actual_sheet}'.{hint_msg} "
+                f"Kolom tersedia: {list(df.columns)}"
+            )
+        df = df.drop_duplicates(subset=[primary_key_col], keep="first")
+        rows = [{"pk": str(r[primary_key_col]), "data": _row_to_dict(r)}
+                for _, r in df.iterrows()]
+        return {"sheet": actual_sheet, "total_rows": len(df), "rows": rows}
+
+    # ── Case B: auto-scan all sheets ──────────────────────────────────────
+    matched_sheets = []
+    all_rows: list[dict] = []
+    seen_pks: set = set()
+
+    for sname in all_sheet_names:
+        try:
+            df, _ = _read_excel(file_bytes, sname)
+        except Exception:
+            continue
+
+        # Case-insensitive column lookup
+        col_map = {c.lower(): c for c in df.columns}
+        actual_col = col_map.get(primary_key_col.lower())
+        if actual_col is None:
+            continue  # this sheet doesn't have the PK column → skip
+
+        # Use the exact column name found in this sheet
+        df = df.drop_duplicates(subset=[actual_col], keep="first")
+        matched_sheets.append(sname)
+
+        for _, row in df.iterrows():
+            pk_val = str(row[actual_col])
+            if pk_val in seen_pks:
+                continue  # skip cross-sheet duplicates
+            seen_pks.add(pk_val)
+
+            # Normalise: store data under the requested PK column name
+            data = _row_to_dict(row)
+            if actual_col != primary_key_col:
+                data[primary_key_col] = data.pop(actual_col, pk_val)
+
+            # Tag which sheet this row came from
+            data.setdefault("sheet", sname)
+            all_rows.append({"pk": pk_val, "data": data})
+
+    if not matched_sheets:
+        # No sheet had the column — build a helpful error message
+        # Show the columns of the first sheet as a hint
+        try:
+            df0, s0 = _read_excel(file_bytes, all_sheet_names[0])
+            available = list(df0.columns)
+        except Exception:
+            available = []
         raise ValueError(
-            f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file.{hint_msg} "
-            f"Kolom tersedia: {list(df.columns)}"
+            f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file manapun. "
+            f"Sheet tersedia: {all_sheet_names}. "
+            f"Kolom di sheet pertama ('{all_sheet_names[0]}'): {available}"
         )
 
-    # Deduplicate within this file by PK (keep first)
-    df = df.drop_duplicates(subset=[primary_key_col], keep="first")
-
-    rows = []
-    for _, row in df.iterrows():
-        rows.append({
-            "pk":   str(row[primary_key_col]),
-            "data": _row_to_dict(row),
-        })
-
+    sheet_label = ", ".join(matched_sheets)
     return {
-        "sheet":      actual_sheet,
-        "total_rows": len(df),
-        "rows":       rows,
+        "sheet":      sheet_label,
+        "total_rows": len(all_rows),
+        "rows":       all_rows,
     }
 
 

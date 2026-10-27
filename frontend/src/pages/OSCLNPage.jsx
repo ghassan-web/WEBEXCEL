@@ -78,11 +78,11 @@ export default function OSCLNPage() {
   const [error,       setError]       = useState(null);
 
   /* ── upload OSCLN CSV ── */
-  const [osclnFile,   setOsclnFile]   = useState(null);
-  const [uploading,   setUploading]   = useState(false);
-  const [uploadPct,   setUploadPct]   = useState(0);
-  const [uploadError, setUploadError] = useState(null);
-  const [uploadOk,    setUploadOk]    = useState(null);   // { snapshot_id, file_name, total_rows }
+  const [osclnFile,    setOsclnFile]    = useState(null);
+  const [uploading,    setUploading]    = useState(false);
+  const [uploadPct,    setUploadPct]    = useState(0);
+  const [uploadError,  setUploadError]  = useState(null);
+  const [uploadOk,     setUploadOk]     = useState(null);   // { snapshot_id, file_name, total_rows }
 
   /* ── snapshots (for Reconciliation Setup) ── */
   const [snapshots,   setSnapshots]   = useState([]);
@@ -149,10 +149,11 @@ export default function OSCLNPage() {
     setUploadOk(null);
     setUploadPct(0);
     try {
-      const fd = new FormData();
+      const now = new Date();
+      const fd  = new FormData();
       fd.append("file",            osclnFile);
-      fd.append("bulan",           String(new Date().getMonth() + 1).padStart(2, "0"));
-      fd.append("tahun",           String(new Date().getFullYear()));
+      fd.append("bulan",           String(now.getMonth() + 1).padStart(2, "0"));
+      fd.append("tahun",           String(now.getFullYear()));
       fd.append("primary_key_col", recPk.trim() || "primary_key_value");
       const res = await uploadOsclnCsv(fd, setUploadPct);
       setUploadOk(res);
@@ -218,24 +219,80 @@ export default function OSCLNPage() {
 
   /* ─── row mapper ───────────────────────────── */
   function mapRow(row, i) {
-    const srcA = row.row_data_a || {};
-    const srcB = row.row_data_b || {};
+    const srcA = row.row_data_a || {};   // Master row data
+    const srcB = row.row_data_b || {};   // OSCLN row data
+    // For only_in_b rows, srcA is empty — use srcB as primary display source
     const src  = Object.keys(srcA).length ? srcA : srcB;
-    const keys = Object.keys(src);
+    const keysA = Object.keys(srcA);
+    const keys  = Object.keys(src);
 
-    const find = (re, fallbackSrc) => {
-      const pool = fallbackSrc ? Object.keys(fallbackSrc) : keys;
-      const s    = fallbackSrc ?? src;
-      const k    = pool.find(k => re.test(k));
+    const find = (re, pool, dataObj) => {
+      const k = pool.find(k => re.test(k));
       if (!k) return "—";
-      const v = s[k];
-      return (v !== null && v !== undefined && String(v).trim() !== "") ? String(v) : "—";
+      const v = dataObj[k];
+      return (v !== null && v !== undefined && String(v).trim() !== "" && String(v) !== "nan") ? String(v) : "—";
     };
 
-    const cedantKey = keys.find(k => /^cedant$/i.test(k))
-                   || keys.find(k => /^company$/i.test(k))
-                   || keys.find(k => /cedant/i.test(k) && !/outstanding|amount|type|tipe/i.test(k));
-    const cedantVal = cedantKey ? (String(src[cedantKey] ?? "").trim() || "—") : "—";
+    const findA = (re) => find(re, keysA, srcA);
+    const findB = (re) => find(re, Object.keys(srcB), srcB);
+
+    // ── Cedant — utamakan kolom "cedant" yang sudah diinjeksi backend ──
+    const cedant = (() => {
+      // backend sekarang inject r.cedant ke dalam data dengan key "cedant"
+      const v = findA(/^cedant$/i);
+      if (v !== "—") return v;
+      const v2 = findA(/^company$/i);
+      if (v2 !== "—") return v2;
+      // broader fallback
+      return findA(/cedant/i) !== "—"
+        ? findA(/cedant/i)
+        : "—";
+    })();
+
+    // ── Sheet — kolom "sheet" diinjeksi backend saat ingest ──
+    const sheet = (() => {
+      const v = findA(/^sheet$/i);
+      if (v !== "—") return v;
+      // fallback ke sheet_a dari job metadata
+      return selected?.sheet_a ?? "Sheet1";
+    })();
+
+    // ── Outstanding ──
+    const outstanding = (() => {
+      for (const re of [
+        /^Orig Currency Amt$/,/^Amount_Net_OS$/i,/^outstanding$/i,/^net_outstanding$/i,
+        /^OS$/,/^os_amount$/i,/^net_os$/i,/^R\/I Share Amount$/i,/^Remain OS/i,
+        /^Outstanding Claim$/i,/^Sum of Outstanding$/i,/^TOTAL AMOUNT TSAI$/i,
+        /^RENDO SHARE$/i,/^NET BALANCE$/i,/^NET_AMT$/i,/^Saldo Akhir Tagih$/i,/^AMOUNT$/i,
+      ]) { const v = findA(re); if (v !== "—") return v; }
+      return findA(/outstanding|balance/i);
+    })();
+
+    // ── Date of Loss ──
+    const dol = (() => {
+      for (const re of [
+        /^Trans Desc\/DOL$/i,/^DOL$/i,/^DOL \(Date of Loss\)$/i,/^DATE OF LOSS$/i,
+        /^Date of Loss$/i,/^date_of_loss$/i,/^loss_date$/i,/^Tgl\. DOL$/i,
+        /^DOCL$/i,/^Loss Date$/i,/^D\.O\.L$/i,/^LossClaim$/i,/^tg_kejadian$/i,
+      ]) { const v = findA(re); if (v !== "—") return v; }
+      return findA(/date.*loss|loss.*date|\bdol\b/i);
+    })();
+
+    // ── Keterangan Loss Ref ──
+    const ketLossRef = (() => {
+      for (const re of [
+        /^keterangan$/i,/^ket$/i,/^keterangan_loss_ref$/i,/^ket_loss_ref$/i,
+        /^description$/i,/^desc$/i,/^remark$/i,/^note$/i,/^catatan$/i,
+      ]) { const v = findA(re); if (v !== "—") return v; }
+      return findA(/keter|remark|note/i);
+    })();
+
+    // ── Same-key rows = count how many rows in results share this PK ──
+    // Untuk saat ini tampilkan "1" karena deduplikasi sudah dilakukan sebelum compare
+    const sameKeyRows = "1";
+
+    // ── OSCLN matched = "1" jika ada di OSCLN, "0" jika tidak ──
+    const osclnMatched = (row.diff_type === "matched" || row.diff_type === "changed") ? "1" : "0";
 
     const idx = i + 1 + page * PAGE_SIZE;
 
@@ -243,22 +300,17 @@ export default function OSCLNPage() {
       runId:        `REC-${String(selected?.id ?? 0).padStart(7,"0")}-${String(idx).padStart(5,"0")}`,
       lossRef:      row.primary_key_value ?? "—",
       diffType:     row.diff_type,
-      cedant:       cedantVal,
-      sheet:        find(/^sheet$/i) !== "—" ? find(/^sheet$/i) : "Sheet1",
-      outstanding:  find(/outstanding|net_amount|os_amount/i) !== "—"
-                      ? find(/outstanding|net_amount|os_amount/i)
-                      : find(/amount|nominal/i),
-      dol:          find(/^date_of_loss$|^dol$|^loss_date$/i) !== "—"
-                      ? find(/^date_of_loss$|^dol$|^loss_date$/i)
-                      : find(/date.*loss|loss.*date/i),
-      ketLossRef:   find(/^keterangan$|^ket_loss_ref$|^keterangan_loss_ref$/i) !== "—"
-                      ? find(/^keterangan$|^ket_loss_ref$|^keterangan_loss_ref$/i)
-                      : find(/ket|desc|keter/i),
-      sameKeyRows:  "1",
-      osclnMatched: (row.diff_type === "matched" || row.diff_type === "changed") ? "1" : "0",
-      osclnCedant:  find(/cedant|company/i, Object.keys(srcB).length ? srcB : null),
-      osclnDol:     find(/date.*loss|dol/i, Object.keys(srcB).length ? srcB : null),
-      osclnLoss:    find(/outstanding|net_amount/i, Object.keys(srcB).length ? srcB : null),
+      cedant,
+      sheet,
+      outstanding,
+      dol,
+      ketLossRef,
+      sameKeyRows,
+      osclnMatched,
+      // OSCLN-side columns (from srcB)
+      osclnCedant:  (() => { const v = findB(/^cedant$/i); return v !== "—" ? v : findB(/cedant|company/i); })(),
+      osclnDol:     (() => { for (const re of [/^DOL$/i,/^DATE OF LOSS$/i,/^Date of Loss$/i,/^date_of_loss$/i,/^loss_date$/i]) { const v = findB(re); if (v !== "—") return v; } return findB(/date.*loss|\bdol\b/i); })(),
+      osclnLoss:    (() => { for (const re of [/^outstanding$/i,/^Orig Currency Amt$/,/^Amount_Net_OS$/i,/^NET BALANCE$/i]) { const v = findB(re); if (v !== "—") return v; } return findB(/outstanding|balance/i); })(),
       rowNum:       String(idx),
     };
   }
@@ -308,7 +360,7 @@ export default function OSCLNPage() {
               </p>
             </div>
 
-            {/* File upload */}
+            {/* File upload — sama persis dengan screenshot (Choose File + button) */}
             <div>
               <p className="text-xs font-semibold text-gray-600 mb-1.5">Upload OSCLN CSV (maks. 15 MB)</p>
               <div className="flex items-center gap-2">
@@ -316,7 +368,7 @@ export default function OSCLNPage() {
                   onChange={e => { setOsclnFile(e.target.files[0] || null); setUploadError(null); setUploadOk(null); e.target.value = ""; }}
                   disabled={uploading} />
                 <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}
-                  className="text-xs border border-gray-300 bg-white hover:bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">
+                  className="text-xs border border-gray-300 bg-white hover:bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0">
                   Choose File
                 </button>
                 <span className="text-xs text-gray-400 truncate max-w-[200px]">
@@ -324,7 +376,7 @@ export default function OSCLNPage() {
                 </span>
               </div>
 
-              {/* Progress bar */}
+              {/* Progress */}
               {uploading && uploadPct > 0 && uploadPct < 100 && (
                 <div className="mt-2 flex flex-col gap-1">
                   <div className="flex justify-between text-xs text-gray-500">
@@ -344,7 +396,7 @@ export default function OSCLNPage() {
                 </div>
               )}
 
-              {/* Error / success feedback */}
+              {/* Error / success */}
               {uploadError && (
                 <div role="alert" className="mt-2 flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-xl text-xs">
                   <ExclamationCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -354,14 +406,16 @@ export default function OSCLNPage() {
               {uploadOk && (
                 <div className="mt-2 flex items-start gap-2 bg-teal-50 border border-teal-200 text-teal-800 px-3 py-2 rounded-xl text-xs">
                   <CheckCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-teal-600" />
-                  <span>
-                    Upload berhasil · <strong>{uploadOk.total_rows?.toLocaleString("id-ID")}</strong> baris
-                    tersimpan sebagai Snapshot #{uploadOk.snapshot_id}
-                  </span>
+                  <div>
+                    <p className="font-semibold">Upload berhasil ✓</p>
+                    <p className="mt-0.5 text-teal-700">
+                      <strong>{uploadOk.total_rows?.toLocaleString("id-ID")}</strong> baris · Snapshot #{uploadOk.snapshot_id} · {uploadOk.file_name}
+                    </p>
+                    <p className="mt-0.5 text-teal-600">Snapshot otomatis dipilih. Klik <strong>Run Two-Way Matching</strong>.</p>
+                  </div>
                 </div>
               )}
 
-              {/* Upload button */}
               <button type="button" onClick={handleUpload} disabled={uploading || !osclnFile}
                 className="mt-3 flex items-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors">
                 <CloudArrowUpIcon className="h-3.5 w-3.5" />
@@ -369,7 +423,7 @@ export default function OSCLNPage() {
               </button>
             </div>
 
-            {/* Google Drive import (UI only) */}
+            {/* Google Drive import */}
             <div>
               <p className="text-xs font-semibold text-gray-600 mb-1.5">Atau import CSV yang sudah ada di Google Drive</p>
               <input type="url" placeholder="https://drive.google.com/file/d/…/view"
@@ -560,9 +614,10 @@ export default function OSCLNPage() {
           <div className="px-5 py-3 border-b border-gray-100 flex flex-wrap items-center gap-2">
             {/* Search */}
             <div className="relative">
+              <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
               <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="SOMPO"
-                className="pl-3 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-36" />
+                placeholder="Search Loss Ref / Cedant / Status"
+                className="pl-8 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-52" />
             </div>
 
             {/* Status dropdown */}

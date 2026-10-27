@@ -31,39 +31,70 @@ def _row_to_dict(series: pd.Series) -> dict:
     return {k: _sanitize(v) for k, v in series.items()}
 
 
-def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 10) -> int:
+def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 50) -> int:
     """
     Scan the first `max_scan` rows to find the best header row.
 
-    A row is considered a valid header when the majority of its non-empty
-    cells do NOT look like pandas auto-generated names ("Unnamed: N") and
-    the row itself is not a single merged-cell title spanning the whole sheet.
+    Scoring logic:
+    - Count non-empty cells per row.
+    - Penalise rows where only 1 distinct value exists (merged title rows).
+    - Prefer rows whose values look like column headers:
+      short strings, mixed alpha/numeric, no sentence-like content.
+    - Strong boost for rows where ALL non-empty values are plain strings
+      (no numeric, no date-like patterns) — the hallmark of a header row.
 
     Returns the 0-based row index to pass to pd.read_excel(header=...).
     """
-    # Read without a header so every row is plain data
+    import re as _re
     raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
                         header=None, dtype=str, nrows=max_scan)
     raw = raw.fillna("")
 
-    best_row  = 0
+    best_row   = 0
     best_score = -1
 
+    # Patterns that indicate a value is data (not a column label)
+    _num_pat  = _re.compile(r"^\s*-?\d[\d,.\s]*$")           # pure number
+    _date_pat = _re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}")  # date
+
     for i, row in raw.iterrows():
-        values = [str(v).strip() for v in row if str(v).strip() != ""]
+        values = [str(v).strip() for v in row if str(v).strip() not in ("", "nan", "None")]
         if not values:
             continue
 
-        # Score = number of non-empty, non-"Unnamed" cells
-        named = [v for v in values
-                 if not v.startswith("Unnamed:") and v not in ("nan", "None")]
-        score = len(named)
+        distinct = len(set(values))
 
-        # Penalise rows that look like a single merged title
-        # (only one distinct non-empty value, or that value looks like a company name)
-        distinct = len(set(named))
+        # Hard skip: single merged-cell title spanning most of the row
         if distinct <= 1 and len(values) >= 3:
-            score = 0
+            continue
+
+        # Hard skip: row looks like a single long sentence / title
+        if len(values) == 1 and len(values[0]) > 40:
+            continue
+
+        # Score = number of non-empty distinct-ish cells
+        score = len(values)
+
+        # Boost: row has many distinct values (good column header signal)
+        score += distinct
+
+        # Boost: most values are short (≤ 40 chars) — typical for headers
+        short = sum(1 for v in values if len(v) <= 40)
+        score += short
+
+        # Strong boost: all values look like plain text labels (no numbers/dates)
+        # This strongly distinguishes header rows from data rows
+        all_text = all(
+            not _num_pat.match(v) and not _date_pat.search(v)
+            for v in values
+        )
+        if all_text and len(values) >= 3:
+            score += len(values) * 2  # heavy boost — very likely a header row
+
+        # Penalise: row has very few non-empty cells relative to total columns
+        total_cols = len(row)
+        if total_cols > 0 and len(values) / total_cols < 0.2:
+            score = max(0, score - 5)
 
         if score > best_score:
             best_score = score
@@ -90,7 +121,12 @@ def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd
 
     df = pd.read_excel(BytesIO(file_bytes), sheet_name=target,
                        header=header_row, dtype=str)
-    df.columns = [str(c).strip() for c in df.columns]
+    # Normalise column names: strip leading/trailing whitespace AND
+    # collapse any run of internal whitespace to a single space so that
+    # e.g. "Ref  No" → "Ref No" and "Ref No" (with NBSP) → "Ref No".
+    df.columns = [
+        " ".join(str(c).split()) for c in df.columns
+    ]
     # Drop completely empty rows
     df.dropna(how="all", inplace=True)
     df.fillna("", inplace=True)

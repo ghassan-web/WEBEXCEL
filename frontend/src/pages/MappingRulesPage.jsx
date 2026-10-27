@@ -17,8 +17,9 @@ import {
 ───────────────────────────────────────────────────────────── */
 const PROFILES_OS = [
   { col:"B",  cedant:"ABB",                sheetMet:"Sheet1",                              lossRef:"AL_Index",               outstanding:"klaim",                            dateOfLoss:"tg_kejadian",         status:"READY"      },
-  { col:"C",  cedant:"ACA",                sheetMet:"Klaim > IDR 100 UTA",                 lossRef:"RefNo",                  outstanding:"Amount_Net_OS",                    dateOfLoss:"DOL",                 status:"READY"      },
-  { col:"D",  cedant:"ACA",                sheetMet:"KlaimAF, KlaimAF, CashCallo",         lossRef:"RefNo",                  outstanding:"Amount_Net_OS",                    dateOfLoss:"DOL",                 status:"READY"      },
+  { col:"C",  cedant:"ACA",                sheetMet:"KlaimFak",                            lossRef:"RefNo",                  outstanding:"Amount_Net_OS",                    dateOfLoss:"DOL",                 status:"READY"      },
+  { col:"D",  cedant:"ACA",                sheetMet:"KlaimAF",                             lossRef:"RefNo",                  outstanding:"Amount_Net_OS",                    dateOfLoss:"DOL",                 status:"READY"      },
+  { col:"D2", cedant:"ACA",                sheetMet:"CashCalls",                           lossRef:"RefNo",                  outstanding:"Amount_Net_OS",                    dateOfLoss:"DOL",                 status:"READY"      },
   { col:"E",  cedant:"ADHI RE",            sheetMet:"Sheet1",                              lossRef:"CLAIM NO",               outstanding:"TOTAL AMOUNT TSAI",                dateOfLoss:"DATE OF LOSS",        status:"READY"      },
   { col:"F",  cedant:"AGGI",               sheetMet:"Sheet1",                              lossRef:"CLAIM NO",               outstanding:"DUE TO INSUL / US",                dateOfLoss:"DATE OF LOSS",        status:"READY"      },
   { col:"G",  cedant:"AON",                sheetMet:"COF",                                 lossRef:"Claim Code",             outstanding:"Claim – in amount",                dateOfLoss:"—",                   status:"INCOMPLETE" },
@@ -76,15 +77,15 @@ const PROFILES_OS = [
   { col:"BG", cedant:"JBGDA (Broker)",     sheetMet:"ACA",                                 lossRef:"No. Ref Alliata",        outstanding:"OS INDORE",                        dateOfLoss:"DOL",                 status:"READY"      },
   { col:"BH", cedant:"JCR (Broker)",       sheetMet:"rencana rékons aguntua",              lossRef:"DLA JCR",                outstanding:"jumlah",                           dateOfLoss:"DOL",                 status:"READY"      },
   { col:"BI", cedant:"KB INS",             sheetMet:"RENDO",                               lossRef:"Claim No.",              outstanding:"Remain OS in 1005",                dateOfLoss:"DOL",                 status:"READY"      },
-  { col:"BJ", cedant:"KB&G (Broker)",      sheetMet:"Sheet1",                              lossRef:"RIST CLAIM",             outstanding:"AMOUNT SHARES REAS",               dateOfLoss:"DATE OF LOSS",        status:"READY"      },
+  { col:"KBRU", cedant:"KBRU (Broker)",    sheetMet:"Sheet1",                              lossRef:"REFF CLAIM",             outstanding:"AMOUNT SHARES REAS",               dateOfLoss:"DATE LOSS",            status:"READY"      },
   { col:"BK", cedant:"LINKS RE (Broker)",  sheetMet:"Sheet1",                              lossRef:"(LINKS-RE) CLAIM NUMBER", outstanding:"CLAIMS SHARE",                    dateOfLoss:"DOL",                 status:"READY"      },
-  { col:"BL", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No. DLA / Claim",        outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
-  { col:"BM", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No. DLA / Claim",        outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
-  { col:"BN", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No. DLA / Claim",        outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
-  { col:"BO", cedant:"LIPPO",              sheetMet:"APPROVED",                            lossRef:"No. DLA / Claim",        outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
-  { col:"BP", cedant:"LIPPO",              sheetMet:"CPM, MONEY",                          lossRef:"No. DLA / Claim",        outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
+  { col:"BL", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No DLA / Claim",         outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
+  { col:"BM", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No DLA / Claim",         outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
+  { col:"BN", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No DLA / Claim",         outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
+  { col:"BO", cedant:"LIPPO",              sheetMet:"APPROVED",                            lossRef:"No DLA / Claim",         outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
+  { col:"BP", cedant:"LIPPO",              sheetMet:"CPM, MONEY",                          lossRef:"No DLA / Claim",         outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
   { col:"BQ", cedant:"MAG",                sheetMet:"SOA 06.2026",                         lossRef:"REFNO",                  outstanding:"AMOUNT NET O/S",                   dateOfLoss:"DATE OF LOSS",        status:"READY"      },
-  { col:"BR", cedant:"MAG",                sheetMet:"RENDO – CRASH PROGRAM",               lossRef:"Reference No.",          outstanding:"Amount Net O/S",                   dateOfLoss:"Date of Loss",        status:"READY"      },
+  { col:"BR", cedant:"MAG",                sheetMet:"RENDO – CRASH PROGRAM",               lossRef:"Document No.",           outstanding:"Amount Net O/S",                   dateOfLoss:"Date of Loss",        status:"READY"      },
   { col:"BS", cedant:"MAG",                sheetMet:"PROPOSED BOD",                        lossRef:"Reference No.",          outstanding:"Amount Net O/S",                   dateOfLoss:"Date of Loss",        status:"READY"      },
   { col:"BT", cedant:"MAG",                sheetMet:"LIST CLAIM BATCH I 2026",             lossRef:"REFNO",                  outstanding:"AMOUNT NET O/S",                   dateOfLoss:"DATE OF LOSS",        status:"READY"      },
   { col:"BU", cedant:"MAG",                sheetMet:"WIJANG GROUP",                        lossRef:"REFNO",                  outstanding:"AMOUNT NET O/S",                   dateOfLoss:"DATE OF LOSS",        status:"READY"      },
@@ -101,11 +102,11 @@ const PROFILES_OS = [
   { col:"CG", cedant:"RAMAVANA",           sheetMet:"TAC-REVIEW, CC-REVIEW, XCL-REVIEW",  lossRef:"NO. DLA",                outstanding:"IDR",                              dateOfLoss:"D.O.L",               status:"READY"      },
   { col:"CH", cedant:"SAMSUNG TUGU",       sheetMet:"PASIF TAC OUT",                       lossRef:"PANCOS NO",              outstanding:"OAC AMT",                          dateOfLoss:"(Tidak tersedia)",    status:"READY"      },
   { col:"CI", cedant:"SAMSUNG TUGU",       sheetMet:"CLAIM",                               lossRef:"CLAIM NO",               outstanding:"OAC AMT",                          dateOfLoss:"(Tidak tersedia)",    status:"READY"      },
-  { col:"CJ", cedant:"SINAR MAS",          sheetMet:"Sheet1",                              lossRef:"No. Invoice",            outstanding:"Due To ASM",                       dateOfLoss:"dd",                  status:"READY"      },
+  { col:"CJ", cedant:"SINAR MAS",          sheetMet:"Sheet1",                              lossRef:"No. Invoice",            outstanding:"Due To ASM",                       dateOfLoss:"dol",                 status:"READY"      },
   { col:"CK", cedant:"SOMPO",              sheetMet:"FAC OUT",                             lossRef:"OUR DEBT/CREDIT NO.",    outstanding:"OUTSTANDING",                      dateOfLoss:"DATE OF LOSS",        status:"READY"      },
-  { col:"CL", cedant:"SOMPO",              sheetMet:"CLAIM",                               lossRef:"OUTSTANDING",            outstanding:"OUTSTANDING",                      dateOfLoss:"DATE OF LOSS",        status:"READY"      },
+  { col:"CL", cedant:"SOMPO",              sheetMet:"CLAIM",                               lossRef:"OUR DEBIT/CREDIT NO",    outstanding:"OUTSTANDING",                      dateOfLoss:"DATE OF LOSS",        status:"READY"      },
   { col:"CM", cedant:"SOMPO",              sheetMet:"CLAIM – AEGS",                        lossRef:"Cross Reference",        outstanding:"Outstanding",                      dateOfLoss:"Loss Date",           status:"READY"      },
-  { col:"CN", cedant:"SOMPO",              sheetMet:"OS, D/I",                             lossRef:"Ref No.",                outstanding:"Outstanding Current",              dateOfLoss:"(Tidak tersedia)",    status:"READY"      },
+  { col:"CN", cedant:"SOMPO",              sheetMet:"OS, D/I",                             lossRef:"Ref No",                 outstanding:"Outstanding Current",              dateOfLoss:"(Tidak tersedia)",    status:"READY"      },
   { col:"CO", cedant:"TOKIO MARINE",       sheetMet:"DacOutClaim",                         lossRef:"CLAIM NO",               outstanding:"CLAIM PAID",                       dateOfLoss:"DATE OF LOSS",        status:"READY"      },
   { col:"CP", cedant:"TPI",                sheetMet:"OS Claim Produksi Agustus 2026",      lossRef:"Claim Number",           outstanding:"Amount",                           dateOfLoss:"(Tidak tersedia)",    status:"READY"      },
   { col:"CQ", cedant:"TRINITY RE (Broker)",sheetMet:"All Cedant",                          lossRef:"Trinity Claim Reff",     outstanding:"Net Loss",                         dateOfLoss:"DOL",                 status:"READY"      },
@@ -119,6 +120,29 @@ const PROFILES_INFOPACK = [
   { col:"C",  cedant:"ACA",            sheetMet:"Infopack",    lossRef:"RefNo",       outstanding:"Amount_Net_OS",   dateOfLoss:"DOL",          status:"READY" },
   { col:"D",  cedant:"ADHI RE",        sheetMet:"Sheet1",      lossRef:"CLAIM NO",    outstanding:"TOTAL AMOUNT",    dateOfLoss:"DATE OF LOSS", status:"READY" },
 ];
+
+/* ─── ACA column detail (dari file Excel O88RI00002) ─────── */
+const ACA_SHEET_COLUMNS = {
+  "KlaimFak": [
+    "Date","DocNo","RefNo","Voucher_No","Branch","COB","Description","vType",
+    "Inception_Date","Expiry_Date","Name_TTG","Due_Date","Over_Due","Currency",
+    "Original_Amount","Paid_Amount","Amount_Net_OS","Wait Approval","DOL",
+    "AcceptedDate","AcceptedBy","AcceptedRefNo","AcceptedStatus","AcceptedRemarks",
+    "Fac Code","PLA No","DLA No",
+  ],
+  "KlaimAF": [
+    "Date","DocNo","RefNo","Voucher_No","Branch","COB","Description","vType",
+    "Inception_Date","Expiry_Date","Name_TTG","Due_Date","Over_Due","Currency",
+    "Amount_Net_OS","Wait Approval","DOL","AcceptedDate","AcceptedBy",
+    "AcceptedRefNo","AcceptedStatus","AcceptedRemarks",
+  ],
+  "CashCalls": [
+    "Date","DocNo","RefNo","Voucher_No","Branch","COB","Description","vType",
+    "Inception_Date","Expiry_Date","Name_TTG","Due_Date","Over_Due","Currency",
+    "Amount_Net_OS","Wait Approval","DOL","AcceptedDate","AcceptedBy",
+    "AcceptedRefNo","AcceptedStatus",
+  ],
+};
 
 /* ─── colour helpers ─────────────────────────────────────── */
 const BROKER_COLOR = "text-teal-700 font-semibold";

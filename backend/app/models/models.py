@@ -8,6 +8,7 @@ class ComparisonJob(Base):
     __tablename__ = "comparison_jobs"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String(36), nullable=True, index=True, comment="Browser session UUID")
     bulan = Column(String(2), nullable=False, comment="Bulan periode (01-12)")
     tahun = Column(String(4), nullable=False, comment="Tahun periode")
     tipe_data = Column(
@@ -69,6 +70,7 @@ class UploadJob(Base):
     __tablename__ = "upload_jobs"
 
     id              = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id      = Column(String(36), nullable=True, index=True, comment="Browser session UUID")
     bulan           = Column(String(2),   nullable=False)
     tahun           = Column(String(4),   nullable=False)
     tipe_data       = Column(String(50),  nullable=False)
@@ -92,6 +94,7 @@ class MasterData(Base):
     __tablename__ = "master_data"
 
     id                = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id        = Column(String(36), nullable=True, index=True, comment="Browser session UUID")
     tipe_data         = Column(String(50),   nullable=False, index=True)
     bulan             = Column(String(2),    nullable=False)
     tahun             = Column(String(4),    nullable=False)
@@ -117,6 +120,7 @@ class OsclnSnapshot(Base):
     __tablename__ = "oscln_snapshots"
 
     id              = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id      = Column(String(36), nullable=True, index=True, comment="Browser session UUID")
     bulan           = Column(String(2),   nullable=False)
     tahun           = Column(String(4),   nullable=False)
     file_name       = Column(String(255), nullable=False)

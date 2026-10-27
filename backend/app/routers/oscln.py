@@ -1,23 +1,21 @@
 """
 Router: /api/oscln
 Handles OSCLN CSV snapshot upload and Master-vs-OSCLN reconciliation.
-
-Flow:
-  1. POST /api/oscln/upload  — ingest CSV → OsclnSnapshot + OsclnRow[]
-  2. POST /api/oscln/reconcile — fetch Master rows from DB + fetch OSCLN rows
-                                 → compare_dataframes() → ComparisonJob + ComparisonResult[]
-  3. GET  /api/oscln/snapshots — list available snapshots
+All endpoints are scoped to the caller's session_id (X-Session-ID header).
 """
 import json
 import logging
-from io import BytesIO
 from typing import Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from ..models import get_db, MasterData, ComparisonJob, ComparisonResult, OsclnSnapshot, OsclnRow
+from ..models import (
+    get_db, get_session_id,
+    MasterData, ComparisonJob, ComparisonResult,
+    OsclnSnapshot, OsclnRow,
+)
 from ..services.excel_service import ingest_csv, compare_dataframes
 
 router = APIRouter(prefix="/api/oscln", tags=["oscln"])
@@ -28,39 +26,31 @@ MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
 
 # ─────────────────────────────────────────────
 # GET /api/oscln/snapshots
-# List all OSCLN snapshots (for dataset picker in UI)
 # ─────────────────────────────────────────────
 @router.get("/snapshots", summary="Daftar snapshot OSCLN CSV")
 def list_snapshots(
-    skip:  int = Query(0,  ge=0),
-    limit: int = Query(20, ge=1, le=100),
-    db:    Session = Depends(get_db),
+    skip:       int     = Query(0,  ge=0),
+    limit:      int     = Query(20, ge=1, le=100),
+    db:         Session = Depends(get_db),
+    session_id: str     = Depends(get_session_id),
 ):
-    total = db.query(OsclnSnapshot).count()
-    snaps = (
-        db.query(OsclnSnapshot)
-        .order_by(OsclnSnapshot.id.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    return {
-        "total":     total,
-        "snapshots": [_snap_to_dict(s) for s in snaps],
-    }
+    q     = db.query(OsclnSnapshot).filter(OsclnSnapshot.session_id == session_id)
+    total = q.count()
+    snaps = q.order_by(OsclnSnapshot.id.desc()).offset(skip).limit(limit).all()
+    return {"total": total, "snapshots": [_snap_to_dict(s) for s in snaps]}
 
 
 # ─────────────────────────────────────────────
 # POST /api/oscln/upload
-# Ingest one CSV file into oscln_snapshots + oscln_rows
 # ─────────────────────────────────────────────
 @router.post("/upload", summary="Upload OSCLN CSV snapshot")
 async def upload_oscln_csv(
-    bulan:           str        = Form(..., description="Bulan periode 01-12"),
-    tahun:           str        = Form(..., description="Tahun periode, misal 2026"),
-    primary_key_col: str        = Form(..., description="Nama kolom primary key di CSV"),
-    file:            UploadFile = File(..., description="File CSV OSCLN"),
+    bulan:           str        = Form(...),
+    tahun:           str        = Form(...),
+    primary_key_col: str        = Form(...),
+    file:            UploadFile = File(...),
     db:              Session    = Depends(get_db),
+    session_id:      str        = Depends(get_session_id),
 ):
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File harus berformat .csv")
@@ -69,7 +59,6 @@ async def upload_oscln_csv(
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File melebihi batas 15 MB")
 
-    # Parse CSV
     try:
         result = ingest_csv(file_bytes, primary_key_col.strip())
     except ValueError as e:
@@ -78,8 +67,8 @@ async def upload_oscln_csv(
         logger.exception("Error ingesting OSCLN CSV")
         raise HTTPException(status_code=500, detail=f"Gagal membaca CSV: {e}")
 
-    # Create snapshot record
     snapshot = OsclnSnapshot(
+        session_id=session_id,
         bulan=bulan,
         tahun=tahun,
         file_name=file.filename,
@@ -91,7 +80,6 @@ async def upload_oscln_csv(
     db.commit()
     db.refresh(snapshot)
 
-    # Bulk-insert rows
     batch = []
     for r in result["rows"]:
         batch.append(OsclnRow(
@@ -119,25 +107,34 @@ async def upload_oscln_csv(
 
 # ─────────────────────────────────────────────
 # POST /api/oscln/reconcile
-# Compare Master (from DB) vs OSCLN snapshot (from DB) → ComparisonJob
 # ─────────────────────────────────────────────
 @router.post("/reconcile", summary="Jalankan rekonsiliasi Master vs OSCLN")
 def run_reconciliation(
-    snapshot_id:     int           = Form(..., description="ID snapshot OSCLN"),
-    tipe_data:       str           = Form(..., description="OS Cedant atau Infopack"),
-    primary_key_col: str           = Form(..., description="Nama kolom primary key"),
-    cedant:          Optional[str] = Form(None, description="Filter Master by cedant (opsional)"),
+    snapshot_id:     int           = Form(...),
+    tipe_data:       str           = Form(...),
+    primary_key_col: str           = Form(...),
+    cedant:          Optional[str] = Form(None),
     db:              Session       = Depends(get_db),
+    session_id:      str           = Depends(get_session_id),
 ):
-    # ── Validate snapshot ──
-    snapshot = db.query(OsclnSnapshot).filter(OsclnSnapshot.id == snapshot_id).first()
+    # ── Validate snapshot ownership ──
+    snapshot = (
+        db.query(OsclnSnapshot)
+          .filter(OsclnSnapshot.id == snapshot_id,
+                  OsclnSnapshot.session_id == session_id)
+          .first()
+    )
     if not snapshot:
         raise HTTPException(status_code=404, detail=f"Snapshot #{snapshot_id} tidak ditemukan")
 
     pk = primary_key_col.strip()
 
-    # ── Load Master rows into DataFrame ──
-    q = db.query(MasterData).filter(MasterData.tipe_data == tipe_data)
+    # ── Load Master rows — scoped to this session ──
+    q = (
+        db.query(MasterData)
+          .filter(MasterData.tipe_data == tipe_data,
+                  MasterData.session_id == session_id)
+    )
     if cedant:
         q = q.filter(MasterData.cedant == cedant)
     master_rows = q.all()
@@ -155,10 +152,8 @@ def run_reconciliation(
             data = json.loads(r.row_data) if r.row_data else {}
         except Exception:
             data = {}
-        # Ensure the primary key column exists in each row
         if pk not in data:
             data[pk] = r.primary_key_value
-        # Inject cedant from dedicated column if not already present in row_data
         if r.cedant and not any(k.lower() == "cedant" for k in data):
             data["cedant"] = r.cedant
         master_records.append(data)
@@ -166,11 +161,11 @@ def run_reconciliation(
     df_master = pd.DataFrame(master_records).astype(str)
     df_master.fillna("", inplace=True)
 
-    # ── Load OSCLN rows into DataFrame ──
+    # ── Load OSCLN rows ──
     oscln_rows = (
         db.query(OsclnRow)
-        .filter(OsclnRow.snapshot_id == snapshot_id)
-        .all()
+          .filter(OsclnRow.snapshot_id == snapshot_id)
+          .all()
     )
     if not oscln_rows:
         raise HTTPException(
@@ -206,9 +201,10 @@ def run_reconciliation(
         logger.exception("Error during reconciliation")
         raise HTTPException(status_code=500, detail=f"Rekonsiliasi gagal: {e}")
 
-    # ── Persist ComparisonJob ──
+    # ── Persist ComparisonJob — tagged with session ──
     s = result["summary"]
     job = ComparisonJob(
+        session_id=session_id,
         bulan=snapshot.bulan,
         tahun=snapshot.tahun,
         tipe_data=tipe_data,
@@ -229,7 +225,6 @@ def run_reconciliation(
     db.commit()
     db.refresh(job)
 
-    # ── Persist ComparisonResult rows ──
     batch = []
     for row in result["results"]:
         batch.append(ComparisonResult(
@@ -249,29 +244,37 @@ def run_reconciliation(
         db.commit()
 
     return {
-        "job_id":        job.id,
-        "snapshot_id":   snapshot_id,
-        "total_rows_a":  result["total_rows_a"],
-        "total_rows_b":  result["total_rows_b"],
-        "summary":       s,
-        "message":       "Rekonsiliasi berhasil.",
+        "job_id":       job.id,
+        "snapshot_id":  snapshot_id,
+        "total_rows_a": result["total_rows_a"],
+        "total_rows_b": result["total_rows_b"],
+        "summary":      s,
+        "message":      "Rekonsiliasi berhasil.",
     }
 
 
 # ─────────────────────────────────────────────
 # DELETE /api/oscln/snapshots/{snapshot_id}
-# Remove snapshot + its rows
 # ─────────────────────────────────────────────
 @router.delete("/snapshots/{snapshot_id}", summary="Hapus snapshot OSCLN")
-def delete_snapshot(snapshot_id: int, db: Session = Depends(get_db)):
-    snap = db.query(OsclnSnapshot).filter(OsclnSnapshot.id == snapshot_id).first()
+def delete_snapshot(
+    snapshot_id: int,
+    db:          Session = Depends(get_db),
+    session_id:  str     = Depends(get_session_id),
+):
+    snap = (
+        db.query(OsclnSnapshot)
+          .filter(OsclnSnapshot.id == snapshot_id,
+                  OsclnSnapshot.session_id == session_id)
+          .first()
+    )
     if not snap:
         raise HTTPException(status_code=404, detail="Snapshot tidak ditemukan")
 
     deleted = (
         db.query(OsclnRow)
-        .filter(OsclnRow.snapshot_id == snapshot_id)
-        .delete(synchronize_session=False)
+          .filter(OsclnRow.snapshot_id == snapshot_id)
+          .delete(synchronize_session=False)
     )
     db.delete(snap)
     db.commit()

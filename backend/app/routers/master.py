@@ -1,6 +1,8 @@
 """
 Router: /api/master
 Handles single-file upload → append to Master, and Master data retrieval.
+All endpoints are scoped to the caller's session_id (X-Session-ID header).
+export endpoint accepts session_id as a query param (window.location.href workaround).
 """
 import csv
 import io
@@ -11,7 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from ..models import get_db, UploadJob, MasterData
+from ..models import get_db, get_session_id, UploadJob, MasterData
 from ..services.excel_service import ingest_excel
 
 router = APIRouter(prefix="/api/master", tags=["master"])
@@ -25,16 +27,16 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 # ─────────────────────────────────────────────
 @router.post("/upload", summary="Unggah satu file Excel dan append ke Master")
 async def upload_to_master(
-    bulan:           str           = Form(..., description="Bulan periode 01-12"),
-    tahun:           str           = Form(..., description="Tahun periode, misal 2026"),
-    tipe_data:       str           = Form(..., description="OS Cedant atau Infopack"),
-    primary_key_col: str           = Form(..., description="Nama kolom primary key"),
-    cedant:          Optional[str] = Form(None, description="Nama cedant (opsional)"),
-    sheet_name:      Optional[str] = Form(None, description="Nama sheet (opsional)"),
-    file:            UploadFile    = File(..., description="File Excel"),
+    bulan:           str           = Form(...),
+    tahun:           str           = Form(...),
+    tipe_data:       str           = Form(...),
+    primary_key_col: str           = Form(...),
+    cedant:          Optional[str] = Form(None),
+    sheet_name:      Optional[str] = Form(None),
+    file:            UploadFile    = File(...),
     db:              Session       = Depends(get_db),
+    session_id:      str           = Depends(get_session_id),
 ):
-    # ── Validasi format ──
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="File harus berformat .xlsx atau .xls")
 
@@ -44,6 +46,7 @@ async def upload_to_master(
 
     # ── Buat upload job ──
     job = UploadJob(
+        session_id=session_id,
         bulan=bulan,
         tahun=tahun,
         tipe_data=tipe_data,
@@ -72,25 +75,26 @@ async def upload_to_master(
         db.commit()
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal: {str(e)}")
 
-    # ── Append ke master_data (skip duplicate PKs) ──
+    # ── Append ke master_data — dedup hanya dalam session yang sama ──
     appended = 0
     skipped  = 0
     batch    = []
 
-    # Fetch all existing PKs for this tipe_data in one query for efficiency
     existing_pks = set(
-        row[0] for row in db.query(MasterData.primary_key_value)
-        .filter(MasterData.tipe_data == tipe_data)
-        .all()
+        row[0] for row in
+        db.query(MasterData.primary_key_value)
+          .filter(MasterData.tipe_data == tipe_data,
+                  MasterData.session_id == session_id)
+          .all()
     )
 
     for r in result["rows"]:
         if r["pk"] in existing_pks:
             skipped += 1
             continue
-        # Inject sheet_name into each row so it's available downstream (e.g. OSCLN reconcile)
         r["data"].setdefault("sheet", result["sheet"])
         batch.append(MasterData(
+            session_id=session_id,
             tipe_data=tipe_data,
             bulan=bulan,
             tahun=tahun,
@@ -99,7 +103,7 @@ async def upload_to_master(
             source_job_id=job.id,
             row_data=json.dumps(r["data"], ensure_ascii=False),
         ))
-        existing_pks.add(r["pk"])  # prevent intra-batch dupes
+        existing_pks.add(r["pk"])
         appended += 1
 
         if len(batch) >= 500:
@@ -111,7 +115,6 @@ async def upload_to_master(
         db.bulk_save_objects(batch)
         db.commit()
 
-    # ── Update job status ──
     job.status        = "done"
     job.total_rows    = result["total_rows"]
     job.rows_appended = appended
@@ -119,12 +122,12 @@ async def upload_to_master(
     db.commit()
 
     return {
-        "job_id":       job.id,
-        "sheet":        result["sheet"],
-        "total_rows":   result["total_rows"],
+        "job_id":        job.id,
+        "sheet":         result["sheet"],
+        "total_rows":    result["total_rows"],
         "rows_appended": appended,
         "rows_skipped":  skipped,
-        "message":      f"Upload berhasil. {appended} baris ditambahkan, {skipped} baris dilewati (duplikat).",
+        "message":       f"Upload berhasil. {appended} baris ditambahkan, {skipped} baris dilewati (duplikat).",
     }
 
 
@@ -133,13 +136,14 @@ async def upload_to_master(
 # ─────────────────────────────────────────────
 @router.get("/data", summary="Ambil data Master (paginated)")
 def get_master_data(
-    tipe_data: Optional[str] = Query(None, description="Filter: OS Cedant atau Infopack"),
-    cedant:    Optional[str] = Query(None, description="Filter by cedant"),
-    skip:      int           = Query(0,    ge=0),
-    limit:     int           = Query(50,   ge=1, le=500),
-    db:        Session       = Depends(get_db),
+    tipe_data:  Optional[str] = Query(None),
+    cedant:     Optional[str] = Query(None),
+    skip:       int           = Query(0,   ge=0),
+    limit:      int           = Query(50,  ge=1, le=500),
+    db:         Session       = Depends(get_db),
+    session_id: str           = Depends(get_session_id),
 ):
-    q = db.query(MasterData)
+    q = db.query(MasterData).filter(MasterData.session_id == session_id)
     if tipe_data:
         q = q.filter(MasterData.tipe_data == tipe_data)
     if cedant:
@@ -148,16 +152,19 @@ def get_master_data(
     total = q.count()
     rows  = q.order_by(MasterData.id.desc()).offset(skip).limit(limit).all()
 
-    # ── Fetch sheet_name from upload_jobs for this batch ──
     job_ids = list({r.source_job_id for r in rows if r.source_job_id})
     job_sheet_map: dict = {}
     if job_ids:
-        jobs = db.query(UploadJob.id, UploadJob.sheet_name).filter(UploadJob.id.in_(job_ids)).all()
+        jobs = (
+            db.query(UploadJob.id, UploadJob.sheet_name)
+              .filter(UploadJob.id.in_(job_ids))
+              .all()
+        )
         job_sheet_map = {j.id: j.sheet_name for j in jobs}
 
     return {
         "total": total,
-        "rows": [_master_row_to_dict(r, job_sheet_map.get(r.source_job_id)) for r in rows],
+        "rows":  [_master_row_to_dict(r, job_sheet_map.get(r.source_job_id)) for r in rows],
     }
 
 
@@ -166,40 +173,28 @@ def get_master_data(
 # ─────────────────────────────────────────────
 @router.get("/jobs", summary="Riwayat upload jobs")
 def list_upload_jobs(
-    skip:  int = Query(0,  ge=0),
-    limit: int = Query(20, ge=1, le=100),
-    db:    Session = Depends(get_db),
+    skip:       int     = Query(0,  ge=0),
+    limit:      int     = Query(20, ge=1, le=100),
+    db:         Session = Depends(get_db),
+    session_id: str     = Depends(get_session_id),
 ):
-    total = db.query(UploadJob).count()
-    jobs  = (
-        db.query(UploadJob)
-        .order_by(UploadJob.id.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    return {
-        "total": total,
-        "jobs": [_upload_job_to_dict(j) for j in jobs],
-    }
-
+    q     = db.query(UploadJob).filter(UploadJob.session_id == session_id)
+    total = q.count()
+    jobs  = q.order_by(UploadJob.id.desc()).offset(skip).limit(limit).all()
+    return {"total": total, "jobs": [_upload_job_to_dict(j) for j in jobs]}
 
 
 # ─────────────────────────────────────────────
-# GET /api/master/export
-# Stream all master_data rows as CSV
+# GET /api/master/export  (session_id via query param — browser nav)
 # ─────────────────────────────────────────────
 @router.get("/export", summary="Export Master data sebagai CSV")
 def export_master_csv(
-    tipe_data: Optional[str] = Query(None, description="Filter: OS Cedant atau Infopack"),
-    cedant:    Optional[str] = Query(None, description="Filter by cedant"),
-    db:        Session       = Depends(get_db),
+    session_id: str           = Query(..., alias="session_id"),
+    tipe_data:  Optional[str] = Query(None),
+    cedant:     Optional[str] = Query(None),
+    db:         Session       = Depends(get_db),
 ):
-    """
-    Streams all rows matching the filter as a UTF-8 CSV file.
-    No pagination — all rows are exported in a single response.
-    """
-    q = db.query(MasterData)
+    q = db.query(MasterData).filter(MasterData.session_id == session_id)
     if tipe_data:
         q = q.filter(MasterData.tipe_data == tipe_data)
     if cedant:
@@ -207,9 +202,8 @@ def export_master_csv(
 
     rows = q.order_by(MasterData.id.asc()).all()
 
-    # ── Gather all dynamic column names from row_data ──
     dynamic_cols: list[str] = []
-    parsed_rows: list[dict] = []
+    parsed_rows:  list[dict] = []
     for r in rows:
         try:
             data = json.loads(r.row_data) if r.row_data else {}
@@ -220,20 +214,21 @@ def export_master_csv(
             if k not in dynamic_cols:
                 dynamic_cols.append(k)
 
-    # ── Fixed meta columns first, then dynamic data columns ──
-    meta_cols = ["id", "tipe_data", "bulan", "tahun", "cedant", "primary_key_value", "source_job_id", "created_at"]
+    meta_cols  = ["id", "tipe_data", "bulan", "tahun", "cedant",
+                  "primary_key_value", "source_job_id", "created_at"]
     fieldnames = meta_cols + dynamic_cols
 
     def generate():
         buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
+        writer = csv.DictWriter(buf, fieldnames=fieldnames,
+                                extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         yield buf.getvalue()
-
         for r, data in zip(rows, parsed_rows):
             buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
-            row_dict = {
+            writer = csv.DictWriter(buf, fieldnames=fieldnames,
+                                    extrasaction="ignore", lineterminator="\n")
+            writer.writerow({
                 "id":                r.id,
                 "tipe_data":         r.tipe_data,
                 "bulan":             r.bulan,
@@ -243,27 +238,77 @@ def export_master_csv(
                 "source_job_id":     r.source_job_id,
                 "created_at":        r.created_at.isoformat() if r.created_at else "",
                 **data,
-            }
-            writer.writerow(row_dict)
+            })
             yield buf.getvalue()
 
-    # Build filename
-    safe_tipe = (tipe_data or "all").replace(" ", "_")
+    safe_tipe   = (tipe_data or "all").replace(" ", "_")
     safe_cedant = f"_{cedant.replace(' ', '_')}" if cedant else ""
-    filename = f"master_{safe_tipe}{safe_cedant}.csv"
+    filename    = f"master_{safe_tipe}{safe_cedant}.csv"
 
     return StreamingResponse(
         generate(),
         media_type="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition":  f'attachment; filename="{filename}"',
             "X-Content-Type-Options": "nosniff",
         },
     )
 
 
 # ─────────────────────────────────────────────
-# Helper serialisers
+# GET /api/master/library
+# ─────────────────────────────────────────────
+@router.get("/library", summary="Library file per tipe data")
+def get_library(
+    tipe_data:  Optional[str] = Query(None),
+    skip:       int           = Query(0,  ge=0),
+    limit:      int           = Query(50, ge=1, le=200),
+    db:         Session       = Depends(get_db),
+    session_id: str           = Depends(get_session_id),
+):
+    q = db.query(UploadJob).filter(UploadJob.session_id == session_id)
+    if tipe_data:
+        q = q.filter(UploadJob.tipe_data == tipe_data)
+
+    total = q.count()
+    jobs  = q.order_by(UploadJob.id.desc()).offset(skip).limit(limit).all()
+    return {"total": total, "files": [_library_entry(j) for j in jobs]}
+
+
+# ─────────────────────────────────────────────
+# DELETE /api/master/library/{job_id}
+# ─────────────────────────────────────────────
+@router.delete("/library/{job_id}", summary="Hapus file dari Library")
+def delete_library_entry(
+    job_id:     int,
+    db:         Session = Depends(get_db),
+    session_id: str     = Depends(get_session_id),
+):
+    # Ownership check — only the session that uploaded may delete
+    job = (
+        db.query(UploadJob)
+          .filter(UploadJob.id == job_id, UploadJob.session_id == session_id)
+          .first()
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Job tidak ditemukan")
+
+    deleted = (
+        db.query(MasterData)
+          .filter(MasterData.source_job_id == job_id)
+          .delete(synchronize_session=False)
+    )
+    db.delete(job)
+    db.commit()
+
+    return {
+        "message":      f"File '{job.file_name}' dihapus dari Library.",
+        "rows_deleted": deleted,
+    }
+
+
+# ─────────────────────────────────────────────
+# Helpers
 # ─────────────────────────────────────────────
 def _master_row_to_dict(r: MasterData, sheet_name: str = None) -> dict:
     try:
@@ -303,76 +348,20 @@ def _upload_job_to_dict(j: UploadJob) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
-# GET /api/master/library
-# Returns per-file upload summary grouped by tipe_data
-# ─────────────────────────────────────────────
-@router.get("/library", summary="Library file per tipe data")
-def get_library(
-    tipe_data: Optional[str] = Query(None, description="Filter: OS Cedant atau Infopack"),
-    skip:      int           = Query(0,  ge=0),
-    limit:     int           = Query(50, ge=1, le=200),
-    db:        Session       = Depends(get_db),
-):
-    """
-    Returns paginated upload jobs enriched with row counts,
-    grouped so the UI can show a per-file library view.
-    """
-    q = db.query(UploadJob)
-    if tipe_data:
-        q = q.filter(UploadJob.tipe_data == tipe_data)
-
-    total = q.count()
-    jobs  = q.order_by(UploadJob.id.desc()).offset(skip).limit(limit).all()
-
-    return {
-        "total": total,
-        "files": [_library_entry(j) for j in jobs],
-    }
-
-
-# ─────────────────────────────────────────────
-# DELETE /api/master/library/{job_id}
-# Removes upload job + its master_data rows
-# ─────────────────────────────────────────────
-@router.delete("/library/{job_id}", summary="Hapus file dari Library")
-def delete_library_entry(
-    job_id: int,
-    db:     Session = Depends(get_db),
-):
-    job = db.query(UploadJob).filter(UploadJob.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job tidak ditemukan")
-
-    # Remove associated master rows
-    deleted = (
-        db.query(MasterData)
-        .filter(MasterData.source_job_id == job_id)
-        .delete(synchronize_session=False)
-    )
-    db.delete(job)
-    db.commit()
-
-    return {
-        "message":       f"File '{job.file_name}' dihapus dari Library.",
-        "rows_deleted":  deleted,
-    }
-
-
 def _library_entry(j: UploadJob) -> dict:
     return {
-        "id":            j.id,
-        "file_name":     j.file_name,
-        "tipe_data":     j.tipe_data,
-        "cedant":        j.cedant,
-        "bulan":         j.bulan,
-        "tahun":         j.tahun,
-        "sheet_name":    j.sheet_name,
+        "id":              j.id,
+        "file_name":       j.file_name,
+        "tipe_data":       j.tipe_data,
+        "cedant":          j.cedant,
+        "bulan":           j.bulan,
+        "tahun":           j.tahun,
+        "sheet_name":      j.sheet_name,
         "primary_key_col": j.primary_key_col,
-        "status":        j.status,
-        "total_rows":    j.total_rows    or 0,
-        "rows_appended": j.rows_appended or 0,
-        "rows_skipped":  j.rows_skipped  or 0,
-        "error_message": j.error_message,
-        "created_at":    j.created_at.isoformat() if j.created_at else None,
+        "status":          j.status,
+        "total_rows":      j.total_rows    or 0,
+        "rows_appended":   j.rows_appended or 0,
+        "rows_skipped":    j.rows_skipped  or 0,
+        "error_message":   j.error_message,
+        "created_at":      j.created_at.isoformat() if j.created_at else None,
     }

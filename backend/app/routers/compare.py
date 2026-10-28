@@ -36,7 +36,7 @@ async def upload_and_compare(
 ):
     # ── Validasi format file ──
     for f, label in [(file_a, "File A"), (file_b, "File B")]:
-        if not f.filename.endswith((".xlsx", ".xls")):
+        if not f.filename.endswith((".xlsx", ".xls", ".xlsb")):
             raise HTTPException(
                 status_code=400,
                 detail=f"{label} harus berformat .xlsx atau .xls"

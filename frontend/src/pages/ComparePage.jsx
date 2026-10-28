@@ -41,11 +41,14 @@ const CEDANT_MAP = [
   { value: "ASM",                 label: "ASM",                            key: "DLA_FLA_DIBAI",           hint: "Kolom: DLA_FLA_DIBAI" },
   { value: "ASIB",                label: "ASIB",                           key: "No. DLA / Ribu / Nota",   hint: "Kolom: No. DLA / Ribu / Nota" },
   { value: "BINTANG",             label: "BINTANG",                        key: "Claim Number",            hint: "Kolom: Claim Number" },
-  { value: "BRINS",               label: "BRINS",                          key: "domino",                  hint: "Kolom: domino" },
-  { value: "CHINA TAIPING",       label: "CHINA TAIPING",                  key: "Claim No.",               hint: "Kolom: Claim No." },
+  { value: "BRINS",               label: "BRINS",                          key: "claimno",                 hint: "Kolom: claimno" },
+  { value: "CHINA TAIPING (CLAIM NO)",  label: "CHINA TAIPING (CLAIM NO)",  key: "Claim No",               hint: "Kolom: Claim No" },
+  { value: "CHINA TAIPING (POLICY NO)", label: "CHINA TAIPING (POLICY NO)",key: "Policy No",               hint: "Kolom: Policy No" },
+  { value: "CHINA TAIPING (DLA NO)",    label: "CHINA TAIPING (DLA NO)",   key: "DLA NO",                  hint: "Kolom: DLA NO" },
+  { value: "CHINA TAIPING (REF NO)",    label: "CHINA TAIPING (REF NO)",   key: "REF NO",                  hint: "Kolom: REF NO" },
   { value: "DAYIN",               label: "DAYIN",                          key: "REFNO",                   hint: "Kolom: REFNO" },
-  { value: "ENERGY RE",           label: "ENERGY RE",                      key: "Ref No.",                 hint: "Kolom: Ref No." },
-  { value: "JASINDO",             label: "JASINDO",                        key: "Reference",               hint: "Kolom: Reference" },
+  { value: "ENERGY RE",           label: "ENERGY RE",                      key: "Ref No",                  hint: "Kolom: Ref No" },
+  { value: "JASINDO",             label: "JASINDO",                        key: "Referensi",               hint: "Kolom: Referensi" },
   { value: "JCR (Broker)",        label: "JCR (Broker)",                   key: "DLA JCR",                 hint: "Kolom: DLA JCR" },
   { value: "KB INS",              label: "KB INS",                         key: "Claim No.",               hint: "Kolom: Claim No." },
   { value: "KBRU (Broker)",       label: "KBRU (Broker)",                  key: "REFF CLAIM",              hint: "Kolom: REFF CLAIM" },
@@ -54,7 +57,7 @@ const CEDANT_MAP = [
   { value: "MAG",                 label: "MAG",                            key: "REFNO",                   hint: "Kolom: REFNO" },
   { value: "MARSH (Broker)",      label: "MARSH (Broker)",                 key: "Trans No.",               hint: "Kolom: Trans No." },
   { value: "MNC",                 label: "MNC",                            key: "CLAIM NO",                hint: "Kolom: CLAIM NO" },
-  { value: "MPM",                 label: "MPM",                            key: "Name Ref No.",            hint: "Kolom: Name Ref No." },
+  { value: "MPM",                 label: "MPM",                            key: "Name\nRef No.",            hint: "Kolom: Name\nRef No." },
   { value: "MURE (BROKER)",       label: "MURE (BROKER)",                  key: "No Claim MURE",           hint: "Kolom: No Claim MURE" },
   { value: "OONA",                label: "OONA",                           key: "Slip No./DLA No.",        hint: "Kolom: Slip No./DLA No." },
   { value: "RAMAYANA",            label: "RAMAYANA",                       key: "NO. DLA",                 hint: "Kolom: NO. DLA" },
@@ -70,7 +73,39 @@ const CEDANT_MAP = [
   { value: "TRIPA",               label: "TRIPA",                          key: "DocNo",                   hint: "Kolom: DocNo" },
   { value: "UMUM MEGA",           label: "UMUM MEGA",                      key: "REFNO",                   hint: "Kolom: REFNO" },
   { value: "VIDEI",               label: "VIDEI",                          key: "No DLA",                  hint: "Kolom: No DLA" },
+  { value: "JBBODA (BROKER)",     label: "JBBODA (BROKER)",                key: "NO. REIBS",               hint: "Kolom: NO. REIBS"},
+  { value: "JASINDO",             label: "JASINDO",                        key: "Referensi",               hint: "Kolom: Referensi" },
+  { value: "JASA RAHARJA",        label: "JASA RAHARJA",                   key: "REF NO",                  hint: "Kolom: REF NO" },
+  { value: "IGNA ASIA (BROKER)",  label: "IGNA ASIA (BROKER)",             key: "REFERENCE IGNA RE / DLA", hint: "Kolom: REFERENCE IGNA RE / DLA" },
+  { value: "IBURE (BROKER)",      label: "IBURE (BROKER)",                 key: "Reference No",            hint: "Kolom: Reference No" },
+  { value: "IBS RE (Broker)",     label: "IBS RE (Broker) — IBS Claimno",  key: "IBS Claimno",             hint: "Kolom: IBS Claimno" },
+  { value: "IBS RE (Broker) 2",   label: "IBS RE (Broker) — NO CLAIM CUBE",key: "NO CLAIM CUBE",           hint: "Kolom: NO CLAIM CUBE" },
+  { value: "HARTA AMAN",          label: "HARTA AMAN",                     key: "Reference No",            hint: "Kolom: Reference No" },
+  { value: "GUYCARP (BROKER)",    label: "GUYCARP (BROKER)",               key: "Client Reference",        hint: "Kolom: Client Reference" },
+  { value: "CEGI",                label: "CEGI",                           key: "Claim N0",                hint: "Kolom: Claim N0" },
+  { value: "GARUDA RE (BROKER)" , label: "GARUDA RE (BROKER)",             key: "Claim No",                hint: "Kolom: Claim No" },
+  { value: "FPG",                 label: "FPG",                            key: "Document No.",            hint: "Kolom: Document No." },
+  { value: "FL RE (BROKER)",      label: "FL RE (BROKER)",                 key: "DLA FLRe",                hint: "Kolom: DLA FLRe" },
+  { value: "ETIQA",               label: "ETIQA",                          key: "Reference No.",           hint: "Kolom: Reference No." },
+  { value: "DEKAI",               label: "DEKAI",                          key: "PLA/DLA DEKAI",           hint: "Kolom: PLA/DLA DEKAI" },
+  { value: "CIPTA COLEMON (BROKER)", label: "CIPTA COLEMON (BROKER)",      key: "CCA Claim Ref. No.",      hint: "Kolom: CCA Claim Ref. No." },
+  { value: "BCA INSURANCE",      label: "BCA INSURANCE",                   key: "Reference No.",           hint: "Kolom: Reference No." },
+  { value: "AXA",                label: "AXA",                             key: "Ref No.",                  hint: "Kolom: Ref No." },
+  { value: "AVRIST",             label: "AVRIST",                          key: "CLAIM NUMBER",            hint: "Kolom: CLAIM NUMBER" },
+  { value: "ASWATA",             label: "ASWATA",                          key: "DLA REASURANSI",          hint: "Kolom: DLA REASURANSI" },
+  { value: "ASTRA BUANA",        label: "ASTRA BUANA",                     key: "ClaimNo",                 hint: "Kolom: ClaimNo" },
+  { value: "ASRINDA (BROKER)",   label: "ASRINDA (BROKER)",                key: "DLA ASRINDA",             hint: "Kolom: DLA ASRINDA" },
+  { value: "ASKRINDO",           label: "ASKRINDO",                        key: "DLA/PLA",                 hint: "Kolom: DLA/PLA" },
+  { value: "ASEI",               label: "ASEI",                            key: "No. DLA / Polis / Nota",  hint: "Kolom: No. DLA / Polis / Nota" },
+  { value: "APIRE (BROKER) (PLA / DLA APIRE)",           label: "APIRE (PLA / DLA APIRE)",                         key: "PLA / DLA APIRE",         hint: "Kolom: PLA / DLA APIRE" },
+  { value: "APIRE(BROKER) (No. DLA APIRE)",              label: "APIRE (No. DLA APIRE)",                           key: "No. DLA APIRE",           hint: "No. DLA APIRE" },
+  { value: "AGGI",              label: "AGGI",                            key: "CLAIM NO",               hint: "Kolom: CLAIM NO" },
+  { value: "ADHI RE",           label: "ADHI RE",                          key: "CLAIM NO",               hint: "Kolom: CLAIM NO" },
+
+
+
 ];
+
 
 /* ─── Upload steps guide ─────────────────────────────── */
 const STEPS = [
@@ -140,7 +175,7 @@ function DropZone({ file, onFile, disabled }) {
   const [drag, setDrag] = useState(false);
 
   const pick = (files) => {
-    const f = Array.from(files).find(f => f.name.endsWith(".xlsx") || f.name.endsWith(".xls"));
+    const f = Array.from(files).find(f => f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.name.endsWith(".xlsb"));
     if (f) onFile(f);
   };
 
@@ -160,7 +195,7 @@ function DropZone({ file, onFile, disabled }) {
           <>
             <CloudArrowUpIcon className="h-9 w-9 text-teal-500" />
             <p className="text-sm font-bold text-gray-700">Drop Excel files here</p>
-            <p className="text-xs text-teal-600">Format .xlsx / .xls · Maks. 15 MB per file</p>
+            <p className="text-xs text-teal-600">Format .xlsx / .xls / .xlsb · Maks. 15 MB per file</p>
           </>
         ) : (
           <div className="w-full flex items-center gap-2 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2">
@@ -174,7 +209,7 @@ function DropZone({ file, onFile, disabled }) {
           </div>
         )}
       </div>
-      <input ref={fileRef}   type="file" accept=".xlsx,.xls" className="hidden"
+      <input ref={fileRef}   type="file" accept=".xlsx,.xls,.xlsb" className="hidden"
         onChange={e => { pick(e.target.files); e.target.value = ""; }} disabled={disabled} />
       <input ref={folderRef} type="file" accept=".xlsx,.xls" multiple webkitdirectory="" className="hidden"
         onChange={e => { pick(e.target.files); e.target.value = ""; }} disabled={disabled} />

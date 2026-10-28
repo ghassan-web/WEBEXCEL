@@ -31,6 +31,61 @@ def _row_to_dict(series: pd.Series) -> dict:
     return {k: _sanitize(v) for k, v in series.items()}
 
 
+def _is_xlsb(file_bytes: bytes) -> bool:
+    """Try to open as xlsb — returns True if it succeeds."""
+    # Check ZIP header (.xlsx is ZIP, .xlsb is not)
+    # .xlsb starts with PK (ZIP) for newer format, or CFB for older
+    # Simplest: try pyxlsb and see
+    try:
+        import pyxlsb as _px
+        with _px.open_workbook(BytesIO(file_bytes)) as wb:
+            _ = wb.sheets
+        return True
+    except Exception:
+        return False
+
+
+def _get_xlsb_sheet_names(file_bytes: bytes) -> list:
+    import pyxlsb
+    with pyxlsb.open_workbook(BytesIO(file_bytes)) as wb:
+        return wb.sheets
+
+
+def _read_xlsb(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
+    """Read a .xlsb file into a DataFrame using pyxlsb directly (no pandas engine)."""
+    import pyxlsb
+
+    with pyxlsb.open_workbook(BytesIO(file_bytes)) as wb:
+        sheet_names = wb.sheets
+        target = sheet_name if sheet_name and sheet_name in sheet_names else sheet_names[0]
+
+        rows = []
+        with wb.get_sheet(target) as sheet:
+            for row in sheet.rows():
+                rows.append([item.v for item in row])
+
+    if not rows:
+        return pd.DataFrame(), target
+
+    # First non-empty row as header
+    header_idx = 0
+    for i, row in enumerate(rows):
+        non_empty = [v for v in row if v is not None and str(v).strip() != ""]
+        if non_empty:
+            header_idx = i
+            break
+
+    headers = [str(v).strip() if v is not None else f"Col_{i}" for i, v in enumerate(rows[header_idx])]
+    data_rows = rows[header_idx + 1:]
+
+    df = pd.DataFrame(data_rows, columns=headers)
+    df = df.astype(str)
+    df.replace("None", "", inplace=True)
+    df.dropna(how="all", inplace=True)
+    df.fillna("", inplace=True)
+    return df, target
+
+
 def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 15) -> int:
     """
     Scan the first `max_scan` rows to find the best header row.
@@ -98,13 +153,15 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 15) -> 
 def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
     """
     Read an Excel file into a DataFrame.
+    Supports .xlsx, .xls, and .xlsb formats.
     If sheet_name is None, the first sheet is used.
-
-    Auto-detects the real header row to handle files where the first row(s)
-    are merged title cells (e.g. company name banners) rather than column names.
-
+    Auto-detects the real header row for .xlsx/.xls.
     Returns (df, actual_sheet_name).
     """
+    if _is_xlsb(file_bytes):
+        return _read_xlsb(file_bytes, sheet_name)
+
+    # ── Standard .xlsx / .xls ─────────────────────────────────────────────
     xls = pd.ExcelFile(BytesIO(file_bytes))
     target = sheet_name if sheet_name and sheet_name in xls.sheet_names else xls.sheet_names[0]
 
@@ -113,15 +170,16 @@ def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd
 
     df = pd.read_excel(BytesIO(file_bytes), sheet_name=target,
                        header=header_row, dtype=str)
-    df.columns = [str(c).strip() for c in df.columns]
-    # Drop completely empty rows
+    df.columns = [' '.join(str(c).strip().replace('\xa0', ' ').replace('\u200b', '').split()) for c in df.columns]
     df.dropna(how="all", inplace=True)
     df.fillna("", inplace=True)
     return df, target
 
 
 def get_sheet_names(file_bytes: bytes) -> list[str]:
-    """Return all sheet names of an Excel workbook."""
+    """Return all sheet names of an Excel workbook (.xlsx, .xls, .xlsb)."""
+    if _is_xlsb(file_bytes):
+        return _get_xlsb_sheet_names(file_bytes)
     xls = pd.ExcelFile(BytesIO(file_bytes))
     return xls.sheet_names
 
@@ -456,10 +514,11 @@ def ingest_excel(
         "rows": [{"pk": str, "data": {col: val, ...}}, ...]
     }
     """
-    xls = pd.ExcelFile(BytesIO(file_bytes))
-    all_sheet_names = xls.sheet_names
-
-    # ── Case A: specific sheet requested ──────────────────────────────────
+    if _is_xlsb(file_bytes):
+        all_sheet_names = _get_xlsb_sheet_names(file_bytes)
+    else:
+        xls = pd.ExcelFile(BytesIO(file_bytes))
+        all_sheet_names = xls.sheet_names
     if sheet_name:
         df, actual_sheet = _read_excel(file_bytes, sheet_name)
         if primary_key_col not in df.columns:
@@ -556,7 +615,7 @@ def ingest_csv(
     sep = ";" if sample.count(";") > sample.count(",") else ","
 
     df = pd.read_csv(BytesIO(file_bytes), sep=sep, dtype=str, encoding="utf-8-sig")
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [' '.join(str(c).strip().replace('\xa0', ' ').replace('\u200b', '').split()) for c in df.columns]
     df.dropna(how="all", inplace=True)
     df.fillna("", inplace=True)
 

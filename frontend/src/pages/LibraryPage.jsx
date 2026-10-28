@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { getLibrary, deleteLibraryEntry, getMasterData } from "../services/api";
+import { getLibrary, deleteLibraryEntry, deleteLibraryEntries, getMasterData } from "../services/api";
 import {
   BookOpenIcon,
   ArrowPathIcon,
@@ -77,6 +77,52 @@ function ConfirmModal({ file, onConfirm, onCancel, loading }) {
   );
 }
 
+/* ── bulk confirm modal ── */
+function BulkConfirmModal({ count, files, onConfirm, onCancel, loading }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+      <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 max-w-md w-full mx-4">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="h-9 w-9 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+            <TrashIcon className="h-4 w-4 text-red-600" />
+          </div>
+          <div>
+            <p className="font-bold text-gray-800 text-sm">Hapus {count} file dari Library?</p>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+              <strong className="text-gray-700">{count} file</strong> beserta semua baris
+              datanya akan dihapus permanen dari Master.
+            </p>
+          </div>
+        </div>
+        <div className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 mb-4 max-h-36 overflow-y-auto">
+          <ul className="space-y-1">
+            {files.map(f => (
+              <li key={f.id} className="flex items-center gap-2 text-xs text-gray-600">
+                <DocumentIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
+                <span className="truncate">{f.file_name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700 mb-4">
+          ⚠ Aksi ini tidak dapat dibatalkan.
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} disabled={loading}
+            className="px-4 py-2 text-xs font-semibold text-gray-600 border border-gray-200 bg-white hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-40">
+            Batal
+          </button>
+          <button onClick={onConfirm} disabled={loading}
+            className="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-40 flex items-center gap-1.5">
+            {loading ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> : <TrashIcon className="h-3.5 w-3.5" />}
+            {loading ? "Menghapus…" : `Ya, Hapus ${count} File`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════
    MAIN PAGE
 ══════════════════════════════════════════════ */
@@ -92,6 +138,8 @@ export default function LibraryPage({ initialTab }) {
   const [loading,     setLoading]     = useState(false);
   const [deleting,    setDeleting]    = useState(false);
   const [confirmFile, setConfirmFile] = useState(null);
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [selected,    setSelected]    = useState(new Set());
   const [toast,       setToast]       = useState(null);
   const [error,       setError]       = useState(null);
 
@@ -114,7 +162,8 @@ export default function LibraryPage({ initialTab }) {
   }, [activeTab, page]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(0); setSearch(""); setSearchInput(""); }, [activeTab]);
+  useEffect(() => { setPage(0); setSearch(""); setSearchInput(""); setSelected(new Set()); }, [activeTab]);
+  useEffect(() => { setSelected(new Set()); }, [page]);
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -135,6 +184,40 @@ export default function LibraryPage({ initialTab }) {
       setDeleting(false);
     }
   };
+
+  /* ── bulk delete ── */
+  const handleBulkDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = Array.from(selected);
+      const res = await deleteLibraryEntries(ids);
+      setConfirmBulk(false);
+      setSelected(new Set());
+      showToast(res.message || `${ids.length} file berhasil dihapus.`);
+      load();
+    } catch (e) {
+      showToast(e.message, "error");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const toggleSelect = (id) =>
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const toggleSelectAll = () => {
+    if (filtered.length && selected.size === filtered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filtered.map(f => f.id)));
+    }
+  };
+
+  const clearSelection = () => setSelected(new Set());
 
   /* client-side filter */
   const filtered = files.filter(f => {
@@ -256,6 +339,30 @@ export default function LibraryPage({ initialTab }) {
             </div>
 
             <div className="flex-1" />
+
+            {/* Bulk actions when selection active */}
+            {selected.size > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-teal-700">
+                  {selected.size} dipilih
+                </span>
+                <button
+                  onClick={clearSelection}
+                  disabled={deleting}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40"
+                >
+                  Batal pilih
+                </button>
+                <button
+                  onClick={() => setConfirmBulk(true)}
+                  disabled={deleting}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-40"
+                >
+                  <TrashIcon className="h-3.5 w-3.5" />
+                  Hapus {selected.size} file
+                </button>
+              </div>
+            )}
             <span className="text-xs text-gray-400">{filtered.length} file</span>
           </div>
 
@@ -264,6 +371,16 @@ export default function LibraryPage({ initialTab }) {
             <table className="min-w-full text-xs">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="px-3 py-2.5 w-8">
+                    <input
+                      type="checkbox"
+                      checked={filtered.length > 0 && selected.size === filtered.length}
+                      onChange={toggleSelectAll}
+                      disabled={loading || filtered.length === 0}
+                      className="h-3.5 w-3.5 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer disabled:opacity-40"
+                      aria-label="Pilih semua"
+                    />
+                  </th>
                   <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">File</th>
                   <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant</th>
                   <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Periode</th>
@@ -279,11 +396,11 @@ export default function LibraryPage({ initialTab }) {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading && (
-                  <tr><td colSpan={11} className="text-center py-12 text-gray-400 animate-pulse">Memuat…</td></tr>
+                  <tr><td colSpan={12} className="text-center py-12 text-gray-400 animate-pulse">Memuat…</td></tr>
                 )}
                 {!loading && filtered.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="text-center py-16">
+                    <td colSpan={12} className="text-center py-16">
                       <div className="flex flex-col items-center gap-2 text-gray-400">
                         <BookOpenIcon className="h-10 w-10 text-gray-200" />
                         <p className="font-medium">Library kosong</p>
@@ -293,7 +410,17 @@ export default function LibraryPage({ initialTab }) {
                   </tr>
                 )}
                 {!loading && filtered.map(f => (
-                  <tr key={f.id} className="hover:bg-teal-50/20 transition-colors group">
+                  <tr key={f.id} className={`hover:bg-teal-50/20 transition-colors group ${selected.has(f.id) ? "bg-teal-50/40" : ""}`}>
+                    {/* Checkbox */}
+                    <td className="px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(f.id)}
+                        onChange={() => toggleSelect(f.id)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                        aria-label={`Pilih ${f.file_name}`}
+                      />
+                    </td>
                     {/* File */}
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2 max-w-[220px]">
@@ -416,6 +543,17 @@ export default function LibraryPage({ initialTab }) {
           file={confirmFile}
           onConfirm={handleDelete}
           onCancel={() => setConfirmFile(null)}
+          loading={deleting}
+        />
+      )}
+
+      {/* ── Bulk confirm modal ── */}
+      {confirmBulk && (
+        <BulkConfirmModal
+          count={selected.size}
+          files={filtered.filter(f => selected.has(f.id))}
+          onConfirm={handleBulkDelete}
+          onCancel={() => setConfirmBulk(false)}
           loading={deleting}
         />
       )}

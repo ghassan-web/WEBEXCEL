@@ -30,7 +30,13 @@ export function useMasterUpload() {
     setFile(f);
     setSheets([]);
     updateForm("sheet_name", "");
-    if (f) {
+    if (f && !f.name.endsWith(".xlsb")) {
+      // .xlsb sheet detection via backend
+      try {
+        const data = await getSheetNames(f);
+        setSheets(data.sheets || []);
+      } catch (_) {}
+    } else if (f && f.name.endsWith(".xlsb")) {
       try {
         const data = await getSheetNames(f);
         setSheets(data.sheets || []);

@@ -167,6 +167,18 @@ export async function deleteLibraryEntry(jobId) {
 }
 
 /**
+ * DELETE /api/master/library  (bulk) — body: { job_ids: [1,2,3] }
+ */
+export async function deleteLibraryEntries(jobIds) {
+  const res = await fetch(`${BASE_URL}/api/master/library`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+  return handleResponse(res);
+}
+
+/**
  * GET /api/master/export?tipe_data=&cedant=  → triggers CSV download
  */
 export function exportMasterCsv(tipeData, cedant) {

@@ -135,10 +135,15 @@ def _open_excel_file(file_bytes: bytes) -> Tuple[pd.ExcelFile, Optional[str]]:
     return pd.ExcelFile(BytesIO(file_bytes)), None
 
 
-def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 50) -> int:
+def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 100) -> int:
     """
     Scan the first `max_scan` rows to find the best header row.
     Works for .xlsx, .xls, and .xlsb files.
+
+    Strategy:
+    1. Score each row based on how much it looks like a header (text labels, distinct values).
+    2. After picking the best candidate, verify it doesn't produce mostly Unnamed columns.
+       If it does, keep scanning for a better row up to max_scan.
     """
     import re as _re
     engine = _get_engine(file_bytes)
@@ -154,6 +159,8 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 50) -> 
     # Patterns that indicate a value is data (not a column label)
     _num_pat  = _re.compile(r"^\s*-?\d[\d,.\s]*$")           # pure number
     _date_pat = _re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}")  # date
+
+    scores: dict[int, float] = {}
 
     for i, row in raw.iterrows():
         values = [str(v).strip() for v in row if str(v).strip() not in ("", "nan", "None")]
@@ -194,9 +201,32 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 50) -> 
         if total_cols > 0 and len(values) / total_cols < 0.2:
             score = max(0, score - 5)
 
+        scores[int(i)] = score
         if score > best_score:
             best_score = score
             best_row   = i
+
+    # ── Post-validation: verify chosen row doesn't produce mostly Unnamed columns ──
+    # If > 50% of columns are Unnamed after using best_row as header, try next best.
+    def _unnamed_ratio(header_row: int) -> float:
+        try:
+            df_check = pd.read_excel(
+                BytesIO(file_bytes), sheet_name=sheet_name,
+                header=header_row, dtype=str, nrows=5, **kwargs
+            )
+            cols = [str(c) for c in df_check.columns]
+            unnamed = sum(1 for c in cols if c.startswith("Unnamed:"))
+            return unnamed / len(cols) if cols else 1.0
+        except Exception:
+            return 1.0
+
+    # Allow up to 3 retries with next-best scoring rows
+    if _unnamed_ratio(int(best_row)) > 0.5:
+        sorted_rows = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        for row_idx, _ in sorted_rows[1:4]:
+            if _unnamed_ratio(row_idx) <= 0.5:
+                best_row = row_idx
+                break
 
     return int(best_row)
 

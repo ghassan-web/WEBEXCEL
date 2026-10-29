@@ -5,10 +5,13 @@ and returns structured results ready for storage and download.
 """
 import json
 import math
+import os
 import pandas as pd
 import numpy as np
 from io import BytesIO
 from typing import Optional, Tuple
+import msoffcrypto
+from msoffcrypto.exceptions import InvalidKeyError
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -31,23 +34,118 @@ def _row_to_dict(series: pd.Series) -> dict:
     return {k: _sanitize(v) for k, v in series.items()}
 
 
+# ─────────────────────────────────────────────
+# KB INS: password-protected XLS reader
+# ─────────────────────────────────────────────
+
+# Nama tipe_data yang memicu pembacaan khusus KB INS
+KBINS_TIPE_DATA = "KB INS"
+# Nama sheet yang wajib dibaca dari workbook KB INS
+KBINS_SHEET_NAME = "2.11"
+
+
+def read_excel_with_password(file_bytes: bytes, password: str | None = None) -> BytesIO:
+    """
+    Membuka file Excel yang dienkripsi dengan password (format OLE2 / XLS).
+    Password diambil dari env var EXCEL_PASSWORD jika tidak diberikan secara eksplisit.
+    Mengembalikan BytesIO berisi bytes workbook yang sudah didekripsi.
+    Jika file tidak terenkripsi, langsung kembalikan BytesIO dari file_bytes asli.
+
+    Raises:
+        ValueError       – jika password belum dikonfigurasi
+        InvalidKeyError  – jika password salah
+    """
+    password = password or os.getenv("EXCEL_PASSWORD")
+    if not password:
+        raise ValueError(
+            "Password Excel belum dikonfigurasi. "
+            "Tambahkan EXCEL_PASSWORD ke file .env."
+        )
+
+    source = BytesIO(file_bytes)
+    office_file = msoffcrypto.OfficeFile(source)
+
+    if office_file.is_encrypted():
+        office_file.load_key(password=password)
+        decrypted = BytesIO()
+        office_file.decrypt(decrypted)
+        decrypted.seek(0)
+        return decrypted
+
+    # File tidak terenkripsi — kembalikan bytes asli
+    return BytesIO(file_bytes)
+
+
+def read_kbins_sheet(file_bytes: bytes) -> pd.DataFrame:
+    """
+    Baca sheet '2.11' dari file KB INS (XLS terenkripsi password).
+    Password diambil otomatis dari env var EXCEL_PASSWORD.
+    Mengembalikan DataFrame dengan kolom asli dari sheet tersebut.
+
+    Raises:
+        ValueError       – password belum dikonfigurasi
+        InvalidKeyError  – password salah
+        ValueError       – sheet '2.11' tidak ditemukan di workbook
+    """
+    excel_file = read_excel_with_password(file_bytes)
+
+    # Cek ketersediaan sheet sebelum baca
+    xls = pd.ExcelFile(excel_file, engine="xlrd")
+    if KBINS_SHEET_NAME not in xls.sheet_names:
+        raise ValueError(
+            f"Sheet '{KBINS_SHEET_NAME}' tidak ditemukan di workbook KB INS. "
+            f"Sheet tersedia: {xls.sheet_names}"
+        )
+
+    # Deteksi baris header secara otomatis
+    excel_file.seek(0)
+    header_row = _find_header_row(excel_file.read(), KBINS_SHEET_NAME)
+
+    excel_file.seek(0)
+    df = pd.read_excel(
+        excel_file,
+        sheet_name=KBINS_SHEET_NAME,
+        engine="xlrd",
+        header=header_row,
+        dtype=str,
+    )
+    df.columns = [" ".join(str(c).split()) for c in df.columns]
+    df.dropna(how="all", inplace=True)
+    df.fillna("", inplace=True)
+    return df
+
+
+def _get_engine(file_bytes: bytes) -> Optional[str]:
+    """Return the correct pandas engine based on file magic bytes / extension hint."""
+    # .xlsb magic: starts with D0 CF 10 E0 (OLE2) but pyxlsb handles the inner XLSB stream
+    # The safest way is to try opening with pyxlsb first for binary workbooks.
+    # We detect by trying pd.ExcelFile with pyxlsb; fall back to openpyxl/xlrd.
+    try:
+        pd.ExcelFile(BytesIO(file_bytes), engine="pyxlsb")
+        return "pyxlsb"
+    except Exception:
+        return None   # let pandas auto-detect (openpyxl for .xlsx, xlrd for .xls)
+
+
+def _open_excel_file(file_bytes: bytes) -> Tuple[pd.ExcelFile, Optional[str]]:
+    """Open an Excel file with the correct engine, returning (ExcelFile, engine)."""
+    engine = _get_engine(file_bytes)
+    if engine:
+        return pd.ExcelFile(BytesIO(file_bytes), engine=engine), engine
+    return pd.ExcelFile(BytesIO(file_bytes)), None
+
+
 def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 50) -> int:
     """
     Scan the first `max_scan` rows to find the best header row.
-
-    Scoring logic:
-    - Count non-empty cells per row.
-    - Penalise rows where only 1 distinct value exists (merged title rows).
-    - Prefer rows whose values look like column headers:
-      short strings, mixed alpha/numeric, no sentence-like content.
-    - Strong boost for rows where ALL non-empty values are plain strings
-      (no numeric, no date-like patterns) — the hallmark of a header row.
-
-    Returns the 0-based row index to pass to pd.read_excel(header=...).
+    Works for .xlsx, .xls, and .xlsb files.
     """
     import re as _re
+    engine = _get_engine(file_bytes)
+    kwargs = {"engine": engine} if engine else {}
+
     raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
-                        header=None, dtype=str, nrows=max_scan)
+                        header=None, dtype=str, nrows=max_scan, **kwargs)
     raw = raw.fillna("")
 
     best_row   = 0
@@ -106,36 +204,27 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 50) -> 
 def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
     """
     Read an Excel file into a DataFrame.
+    Supports .xlsx, .xls, and .xlsb (via pyxlsb engine).
     If sheet_name is None, the first sheet is used.
-
-    Auto-detects the real header row to handle files where the first row(s)
-    are merged title cells (e.g. company name banners) rather than column names.
-
-    Returns (df, actual_sheet_name).
     """
-    xls = pd.ExcelFile(BytesIO(file_bytes))
+    xls, engine = _open_excel_file(file_bytes)
     target = sheet_name if sheet_name and sheet_name in xls.sheet_names else xls.sheet_names[0]
 
     # Auto-detect header row
     header_row = _find_header_row(file_bytes, target)
 
+    kwargs = {"engine": engine} if engine else {}
     df = pd.read_excel(BytesIO(file_bytes), sheet_name=target,
-                       header=header_row, dtype=str)
-    # Normalise column names: strip leading/trailing whitespace AND
-    # collapse any run of internal whitespace to a single space so that
-    # e.g. "Ref  No" → "Ref No" and "Ref No" (with NBSP) → "Ref No".
-    df.columns = [
-        " ".join(str(c).split()) for c in df.columns
-    ]
-    # Drop completely empty rows
+                       header=header_row, dtype=str, **kwargs)
+    df.columns = [" ".join(str(c).split()) for c in df.columns]
     df.dropna(how="all", inplace=True)
     df.fillna("", inplace=True)
     return df, target
 
 
 def get_sheet_names(file_bytes: bytes) -> list[str]:
-    """Return all sheet names of an Excel workbook."""
-    xls = pd.ExcelFile(BytesIO(file_bytes))
+    """Return all sheet names of an Excel workbook. Supports .xlsx, .xls, .xlsb."""
+    xls, _ = _open_excel_file(file_bytes)
     return xls.sheet_names
 
 
@@ -448,6 +537,54 @@ def _write_results_sheet(ws, rows: list, filter_types):
 # Single-file ingestion (append to Master)
 # ─────────────────────────────────────────────
 
+_COMPOSITE_SEP = "|"   # separator di primary_key_col spec:  "DOL|COB"
+_PK_JOIN       = "__"  # separator di nilai PK yang dihasilkan: "2024-01-01__Fire"
+_VIRTUAL_PK    = "__pk__"   # nama kolom virtual yang dibuat di DataFrame
+
+
+def _is_composite(pk_col: str) -> bool:
+    """Return True jika primary_key_col mengandung '|' (format composite)."""
+    return _COMPOSITE_SEP in pk_col
+
+
+def _composite_parts(pk_col: str) -> list[str]:
+    """Split 'DOL|COB' → ['DOL', 'COB']."""
+    return [c.strip() for c in pk_col.split(_COMPOSITE_SEP) if c.strip()]
+
+
+def _resolve_col(col_spec: str, df_cols: list[str]) -> str:
+    """
+    Find the actual column name in df_cols that matches col_spec.
+    Tries exact match first, then case-insensitive.
+    Raises ValueError with available columns if not found.
+    """
+    if col_spec in df_cols:
+        return col_spec
+    lower_map = {c.lower(): c for c in df_cols}
+    found = lower_map.get(col_spec.lower())
+    if found:
+        return found
+    raise ValueError(
+        f"Kolom '{col_spec}' tidak ditemukan. "
+        f"Kolom tersedia: {df_cols}"
+    )
+
+
+def _inject_composite_pk(df: pd.DataFrame, pk_col: str) -> pd.DataFrame:
+    """
+    Jika pk_col adalah composite (misal 'DOL|COB'), buat kolom virtual
+    '__pk__' yang berisi gabungan nilai kedua kolom dipisah '__'.
+    Mengembalikan DataFrame dengan kolom '__pk__' tambahan.
+    """
+    parts  = _composite_parts(pk_col)
+    actual = [_resolve_col(p, list(df.columns)) for p in parts]
+    df = df.copy()
+    df[_VIRTUAL_PK] = df[actual[0]].astype(str).str.strip()
+    for col in actual[1:]:
+        df[_VIRTUAL_PK] = df[_VIRTUAL_PK] + _PK_JOIN + df[col].astype(str).str.strip()
+    return df
+
+
 def ingest_excel(
     file_bytes: bytes,
     primary_key_col: str,
@@ -455,6 +592,10 @@ def ingest_excel(
 ) -> dict:
     """
     Read one Excel file and return its rows ready for Master append.
+
+    primary_key_col supports composite format: "DOL|COB"
+    — both column names are looked up (case-insensitive), their values are
+      joined with '__' and stored as the primary_key_value.
 
     Returns:
     {
@@ -465,25 +606,33 @@ def ingest_excel(
     """
     df, actual_sheet = _read_excel(file_bytes, sheet_name)
 
-    if primary_key_col not in df.columns:
-        # Try case-insensitive match as a fallback hint
-        lower_map = {c.lower(): c for c in df.columns}
-        hint = lower_map.get(primary_key_col.lower())
-        hint_msg = (
-            f" (Mungkin maksud Anda: '{hint}'?)" if hint else ""
-        )
-        raise ValueError(
-            f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file.{hint_msg} "
-            f"Kolom tersedia: {list(df.columns)}"
-        )
+    if _is_composite(primary_key_col):
+        # ── Composite key (e.g. "DOL|COB") ──────────────────────────────
+        try:
+            df = _inject_composite_pk(df, primary_key_col)
+        except ValueError as e:
+            raise ValueError(str(e))
+        pk_col_used = _VIRTUAL_PK
+
+    else:
+        # ── Single key ───────────────────────────────────────────────────
+        if primary_key_col not in df.columns:
+            lower_map = {c.lower(): c for c in df.columns}
+            hint = lower_map.get(primary_key_col.lower())
+            hint_msg = f" (Mungkin maksud Anda: '{hint}'?)" if hint else ""
+            raise ValueError(
+                f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file.{hint_msg} "
+                f"Kolom tersedia: {list(df.columns)}"
+            )
+        pk_col_used = primary_key_col
 
     # Deduplicate within this file by PK (keep first)
-    df = df.drop_duplicates(subset=[primary_key_col], keep="first")
+    df = df.drop_duplicates(subset=[pk_col_used], keep="first")
 
     rows = []
     for _, row in df.iterrows():
         rows.append({
-            "pk":   str(row[primary_key_col]),
+            "pk":   str(row[pk_col_used]),
             "data": _row_to_dict(row),
         })
 
@@ -504,6 +653,7 @@ def ingest_csv(
 ) -> dict:
     """
     Read one CSV file and return its rows ready for OsclnRow storage.
+    Supports composite primary_key_col format: "DOL|COB".
 
     Accepts comma-separated or semicolon-separated files; auto-detects separator.
     Returns:
@@ -521,22 +671,111 @@ def ingest_csv(
     df.dropna(how="all", inplace=True)
     df.fillna("", inplace=True)
 
-    if primary_key_col not in df.columns:
-        raise ValueError(
-            f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file CSV. "
-            f"Kolom tersedia: {list(df.columns)}"
-        )
+    if _is_composite(primary_key_col):
+        try:
+            df = _inject_composite_pk(df, primary_key_col)
+        except ValueError as e:
+            raise ValueError(str(e))
+        pk_col_used = _VIRTUAL_PK
+    else:
+        if primary_key_col not in df.columns:
+            raise ValueError(
+                f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file CSV. "
+                f"Kolom tersedia: {list(df.columns)}"
+            )
+        pk_col_used = primary_key_col
 
-    df = df.drop_duplicates(subset=[primary_key_col], keep="first")
+    df = df.drop_duplicates(subset=[pk_col_used], keep="first")
 
     rows = []
     for _, row in df.iterrows():
         rows.append({
-            "pk":   str(row[primary_key_col]),
+            "pk":   str(row[pk_col_used]),
             "data": _row_to_dict(row),
         })
 
     return {
+        "total_rows": len(df),
+        "rows":       rows,
+    }
+
+
+# ─────────────────────────────────────────────
+# KB INS ingestion (password-protected XLS)
+# ─────────────────────────────────────────────
+
+def ingest_kbins(file_bytes: bytes, cedant: str = "") -> dict:
+    """
+    Baca sheet '2.11' dari file KB INS (XLS terenkripsi password).
+    Password diambil otomatis dari env var EXCEL_PASSWORD.
+
+    Mendukung dua varian KB INS berdasarkan nilai `cedant`:
+      - "KB INS (Proportional)"     → outstanding kolom "Sum of ANR"
+      - "KB INS (Non-Proportional)" → outstanding kolom "Sum of XOL"
+      - lainnya / kosong            → default ke Proportional
+
+    Primary key untuk kedua varian = "Claim No" (case-insensitive fallback).
+
+    Returns:
+    {
+        "sheet":      str,       # selalu "2.11"
+        "variant":    str,       # "proportional" atau "non_proportional"
+        "total_rows": int,
+        "rows":       [{"pk": str, "data": {col: val, ...}}, ...]
+    }
+
+    Raises:
+        ValueError       – password belum dikonfigurasi atau sheet/kolom tidak ditemukan
+        InvalidKeyError  – password salah
+    """
+    from msoffcrypto.exceptions import InvalidKeyError  # noqa: F401 – re-raised by caller
+
+    df = read_kbins_sheet(file_bytes)
+
+    lower_map = {c.lower(): c for c in df.columns}
+
+    # ── Deteksi varian dari nama cedant ─────────────────────────────────
+    is_nonprop = "non-proportional" in cedant.lower() or "nonprop" in cedant.lower()
+    variant    = "non_proportional" if is_nonprop else "proportional"
+
+    # Kolom outstanding yang diharapkan per varian (untuk validasi/logging)
+    expected_outstanding = "Sum of XOL" if is_nonprop else "Sum of ANR"
+
+    # ── Resolve Primary Key ──────────────────────────────────────────────
+    pk_col = "Claim No"
+    if pk_col not in df.columns:
+        found = lower_map.get(pk_col.lower())
+        if found:
+            pk_col = found
+        else:
+            raise ValueError(
+                f"Kolom Primary Key '{pk_col}' tidak ditemukan di sheet '{KBINS_SHEET_NAME}'. "
+                f"Kolom tersedia: {list(df.columns)}"
+            )
+
+    # ── Validasi kolom outstanding tersedia (warning via ValueError jika tidak ada) ──
+    outstanding_col = expected_outstanding
+    if outstanding_col not in df.columns:
+        found_os = lower_map.get(outstanding_col.lower())
+        if found_os:
+            outstanding_col = found_os
+        else:
+            # Tidak raise — kolom mungkin bernama berbeda, ingest tetap berjalan
+            outstanding_col = None
+
+    df = df.drop_duplicates(subset=[pk_col], keep="first")
+
+    rows = []
+    for _, row in df.iterrows():
+        rows.append({
+            "pk":   str(row[pk_col]),
+            "data": _row_to_dict(row),
+        })
+
+    return {
+        "sheet":      KBINS_SHEET_NAME,
+        "variant":    variant,
+        "outstanding_col": outstanding_col,   # None jika kolom tidak ditemukan
         "total_rows": len(df),
         "rows":       rows,
     }
@@ -555,27 +794,46 @@ def compare_dataframes(
 ) -> dict:
     """
     Compare two DataFrames row-by-row based on primary_key_col.
+    Supports composite key format: "DOL|COB".
     Both DataFrames must already have primary_key_col as a regular column (not index).
 
-    Returns the same structure as compare_excel() so existing storage / report
-    code can be reused without modification.
+    For composite keys, each DataFrame must already contain a '__pk__' column
+    (injected by ingest_excel / ingest_csv), OR the component columns exist
+    so we can inject them here.
     """
-    if primary_key_col not in df_a.columns:
-        raise ValueError(
-            f"Kolom '{primary_key_col}' tidak ditemukan di {label_a}. "
-            f"Kolom tersedia: {list(df_a.columns)}"
-        )
-    if primary_key_col not in df_b.columns:
-        raise ValueError(
-            f"Kolom '{primary_key_col}' tidak ditemukan di {label_b}. "
-            f"Kolom tersedia: {list(df_b.columns)}"
-        )
+    # ── Resolve composite key in both DataFrames ─────────────────────────
+    if _is_composite(primary_key_col):
+        # df_a (Master rows) — component cols came from ingest_excel via row_data,
+        # so __pk__ might already exist; if not, build it.
+        if _VIRTUAL_PK not in df_a.columns:
+            try:
+                df_a = _inject_composite_pk(df_a, primary_key_col)
+            except ValueError as e:
+                raise ValueError(f"{label_a}: {e}")
+        if _VIRTUAL_PK not in df_b.columns:
+            try:
+                df_b = _inject_composite_pk(df_b, primary_key_col)
+            except ValueError as e:
+                raise ValueError(f"{label_b}: {e}")
+        pk_col_used = _VIRTUAL_PK
+    else:
+        if primary_key_col not in df_a.columns:
+            raise ValueError(
+                f"Kolom '{primary_key_col}' tidak ditemukan di {label_a}. "
+                f"Kolom tersedia: {list(df_a.columns)}"
+            )
+        if primary_key_col not in df_b.columns:
+            raise ValueError(
+                f"Kolom '{primary_key_col}' tidak ditemukan di {label_b}. "
+                f"Kolom tersedia: {list(df_b.columns)}"
+            )
+        pk_col_used = primary_key_col
 
-    df_a = df_a.drop_duplicates(subset=[primary_key_col], keep="first")
-    df_b = df_b.drop_duplicates(subset=[primary_key_col], keep="first")
+    df_a = df_a.drop_duplicates(subset=[pk_col_used], keep="first")
+    df_b = df_b.drop_duplicates(subset=[pk_col_used], keep="first")
 
-    df_a_idx = df_a.set_index(primary_key_col)
-    df_b_idx = df_b.set_index(primary_key_col)
+    df_a_idx = df_a.set_index(pk_col_used)
+    df_b_idx = df_b.set_index(pk_col_used)
 
     keys_a = set(df_a_idx.index)
     keys_b = set(df_b_idx.index)

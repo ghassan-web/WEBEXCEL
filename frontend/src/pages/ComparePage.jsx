@@ -28,7 +28,7 @@ const YEARS = Array.from({ length: 6 }, (_, i) => String(new Date().getFullYear(
 
 const SEL = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-50 disabled:text-gray-400 transition appearance-none";
 
-/* ─── Cedant → primary key map ───────────────────────── */
+/* ─── Cedant → primary key map  (OS Claim Cedant) ────── */
 const CEDANT_MAP = [
   { value: "",                    label: "— Pilih Cedant / Sumber —",      key: "",                        hint: "" },
   { value: "ABB",                 label: "ABB",                            key: "AL_Index",                hint: "Kolom: AL_Index" },
@@ -48,9 +48,14 @@ const CEDANT_MAP = [
   { value: "JASINDO",             label: "JASINDO",                        key: "Reference",               hint: "Kolom: Reference" },
   { value: "JCR (Broker)",        label: "JCR (Broker)",                   key: "DLA JCR",                 hint: "Kolom: DLA JCR" },
   { value: "KB INS",              label: "KB INS",                         key: "Claim No.",               hint: "Kolom: Claim No." },
+  { value: "KARK (Proportional)", label: "KARK (Proportional)",            key: "Insured",                 hint: "Kolom: Insured (sheet List Realisasi)" },
+  { value: "KARK (Non-Proportional)", label: "KARK (Non-Proportional)",    key: "Insured Name",            hint: "Kolom: Insured Name (sheet 5.1)" },
+  { value: "KB INS (Non-Proportional)", label: "KB INS (Non-Proportional)", key: "Claim No",               hint: "Kolom: Claim No (sheet 2.11)" },
   { value: "KBRU (Broker)",       label: "KBRU (Broker)",                  key: "REFF CLAIM",              hint: "Kolom: REFF CLAIM" },
   { value: "LINKS RE (Broker)",   label: "LINKS RE (Broker)",              key: "(LINKS-RE) CLAIM NUMBER", hint: "Kolom: (LINKS-RE) CLAIM NUMBER" },
   { value: "LIPPO",               label: "LIPPO",                          key: "No DLA / Claim",          hint: "Kolom: No DLA / Claim" },
+  { value: "LIPPO (Proportional)", label: "LIPPO (Proportional)",          key: "Claim No",                hint: "Kolom: Claim No (Exhibit 5.1 / 5.2)" },
+  { value: "LIPPO (Non-Proportional)", label: "LIPPO (Non-Proportional)",  key: "Insured Name",            hint: "Kolom: Insured Name (Exhibit 5.1) / Event Name (Exhibit 5.2)" },
   { value: "MAG",                 label: "MAG",                            key: "REFNO",                   hint: "Kolom: REFNO" },
   { value: "MARSH (Broker)",      label: "MARSH (Broker)",                 key: "Trans No.",               hint: "Kolom: Trans No." },
   { value: "MNC",                 label: "MNC",                            key: "CLAIM NO",                hint: "Kolom: CLAIM NO" },
@@ -70,6 +75,54 @@ const CEDANT_MAP = [
   { value: "TRIPA",               label: "TRIPA",                          key: "DocNo",                   hint: "Kolom: DocNo" },
   { value: "UMUM MEGA",           label: "UMUM MEGA",                      key: "REFNO",                   hint: "Kolom: REFNO" },
   { value: "VIDEI",               label: "VIDEI",                          key: "No DLA",                  hint: "Kolom: No DLA" },
+];
+
+/* ─── Cedant → primary key map  (InfoPack) ───────────── */
+/* InfoPack: primary key = DOL + COB (composite) untuk semua cedant */
+const CEDANT_MAP_INFOPACK = [
+  { value: "",               label: "— Pilih Cedant / Sumber —", key: "",        hint: "" },
+  { value: "ABB",            label: "ABB",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "ACA",            label: "ACA",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "ADHI RE",        label: "ADHI RE",                    key: "DOL|COB", hint: "DOL · COB" },
+  { value: "AGGI",           label: "AGGI",                       key: "DOL|COB", hint: "DOL · COB" },
+  { value: "AON (Broker)",   label: "AON (Broker)",               key: "DOL|COB", hint: "DOL · COB" },
+  { value: "API RE (Broker)",label: "API RE (Broker)",            key: "DOL|COB", hint: "DOL · COB" },
+  { value: "ASIB",           label: "ASIB",                       key: "DOL|COB", hint: "DOL · COB" },
+  { value: "ASKRINDO",       label: "ASKRINDO",                   key: "DOL|COB", hint: "DOL · COB" },
+  { value: "ASTRARAHANA",    label: "ASTRARAHANA",                key: "DOL|COB", hint: "DOL · COB" },
+  { value: "AVRIST",         label: "AVRIST",                     key: "DOL|COB", hint: "DOL · COB" },
+  { value: "AXA",            label: "AXA",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "BCA INSURANCE",  label: "BCA INSURANCE",              key: "DOL|COB", hint: "DOL · COB" },
+  { value: "BINTANG",        label: "BINTANG",                    key: "DOL|COB", hint: "DOL · COB" },
+  { value: "BRINS",          label: "BRINS",                      key: "DOL|COB", hint: "DOL · COB" },
+  { value: "CHINA TAIPING",  label: "CHINA TAIPING",              key: "DOL|COB", hint: "DOL · COB" },
+  { value: "ETIGA",          label: "ETIGA",                      key: "DOL|COB", hint: "DOL · COB" },
+  { value: "FPG",            label: "FPG",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "GEGI",           label: "GEGI",                       key: "DOL|COB", hint: "DOL · COB" },
+  { value: "HARTA AMAN",     label: "HARTA AMAN",                 key: "DOL|COB", hint: "DOL · COB" },
+  { value: "JASA RAHARJA",   label: "JASA RAHARJA",               key: "DOL|COB", hint: "DOL · COB" },
+  { value: "JASINDO",        label: "JASINDO",                    key: "DOL|COB", hint: "DOL · COB" },
+  { value: "JASTAN",            label: "JASTAN (Proportional)",      key: "DOL|COB", hint: "DOL · COB" },
+  { value: "JASTAN (Non-Proportional)", label: "JASTAN (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
+  { value: "KARK (Proportional)",      label: "KARK (Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
+  { value: "KARK (Non-Proportional)", label: "KARK (Non-Proportional)",   key: "DOL|COB", hint: "DOL · COB" },
+  { value: "KB INS (Proportional)",    label: "KB INS (Proportional)",     key: "DOL|COB", hint: "DOL · COB" },
+  { value: "KB INS (Non-Proportional)", label: "KB INS (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
+  { value: "LIPPO",          label: "LIPPO",                      key: "DOL|COB", hint: "DOL · COB" },
+  { value: "LIPPO (Proportional)", label: "LIPPO (Proportional)", key: "DOL|COB", hint: "DOL · COB" },
+  { value: "LIPPO (Non-Proportional)", label: "LIPPO (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
+  { value: "MAG",            label: "MAG",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "MNC",            label: "MNC",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "MPM",            label: "MPM",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "OONA",           label: "OONA",                       key: "DOL|COB", hint: "DOL · COB" },
+  { value: "RAMAYANA",       label: "RAMAYANA",                   key: "DOL|COB", hint: "DOL · COB" },
+  { value: "SAMSUNG TUGU",   label: "SAMSUNG TUGU",               key: "DOL|COB", hint: "DOL · COB" },
+  { value: "SINAR MAS",      label: "SINAR MAS",                  key: "DOL|COB", hint: "DOL · COB" },
+  { value: "SOMPO",          label: "SOMPO",                      key: "DOL|COB", hint: "DOL · COB" },
+  { value: "TOKIO MARINE",   label: "TOKIO MARINE",               key: "DOL|COB", hint: "DOL · COB" },
+  { value: "TPI",            label: "TPI",                        key: "DOL|COB", hint: "DOL · COB" },
+  { value: "UMUM MEGA",      label: "UMUM MEGA",                  key: "DOL|COB", hint: "DOL · COB" },
+  { value: "VIDEI",          label: "VIDEI",                      key: "DOL|COB", hint: "DOL · COB" },
 ];
 
 /* ─── Upload steps guide ─────────────────────────────── */
@@ -139,8 +192,13 @@ function DropZone({ file, onFile, disabled }) {
   const folderRef = useRef(null);
   const [drag, setDrag] = useState(false);
 
+  // Accept semua file Excel — filter di sini, bukan di attribute accept
+  // agar dialog tidak menyembunyikan file valid di beberapa browser/OS
+  const EXCEL_EXTS = [".xlsx", ".xls", ".xlsm", ".xlsb"];
+  const isExcel = (name) => EXCEL_EXTS.some(ext => name.toLowerCase().endsWith(ext));
+
   const pick = (files) => {
-    const f = Array.from(files).find(f => f.name.endsWith(".xlsx") || f.name.endsWith(".xls"));
+    const f = Array.from(files).find(f => isExcel(f.name));
     if (f) onFile(f);
   };
 
@@ -174,9 +232,10 @@ function DropZone({ file, onFile, disabled }) {
           </div>
         )}
       </div>
-      <input ref={fileRef}   type="file" accept=".xlsx,.xls" className="hidden"
+      {/* accept="*" — tampilkan SEMUA file di dialog, filter ekstensi di pick() */}
+      <input ref={fileRef}   type="file" accept="*" className="hidden"
         onChange={e => { pick(e.target.files); e.target.value = ""; }} disabled={disabled} />
-      <input ref={folderRef} type="file" accept=".xlsx,.xls" multiple webkitdirectory="" className="hidden"
+      <input ref={folderRef} type="file" accept="*" multiple webkitdirectory="" className="hidden"
         onChange={e => { pick(e.target.files); e.target.value = ""; }} disabled={disabled} />
       <div className="flex gap-2">
         <button type="button" onClick={() => fileRef.current?.click()} disabled={disabled}
@@ -212,18 +271,37 @@ export default function ComparePage({ onNavigate }) {
   const [driveCedant, setDriveCedant] = useState("");
   const [showGuide,   setShowGuide]   = useState(true);
 
-  const jenisTipe    = activeTab === "os" ? "OS Cedant" : "Infopack";
-  const selectedEntry = CEDANT_MAP.find(c => c.value === form.cedant);
+  const jenisTipe       = activeTab === "os" ? "OS Cedant" : "Infopack";
+  const isInfopack      = activeTab === "infopack";
+  const activeCedantMap = isInfopack ? CEDANT_MAP_INFOPACK : CEDANT_MAP;
+  const selectedEntry   = activeCedantMap.find(c => c.value === form.cedant);
+
+  // For InfoPack composite key: split "DOL|COB" into editable parts
+  const isComposite = isInfopack && selectedEntry?.key?.includes("|");
+  const [dolPart, cobPart] = isComposite
+    ? selectedEntry.key.split("|").map(s => s.trim())
+    : ["", ""];
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     updateForm("tipe_data", tab === "os" ? "OS Cedant" : "Infopack");
+    updateForm("cedant", "");
+    updateForm("primary_key_col", "");
   };
 
   const handleCedantChange = (val) => {
-    const entry = CEDANT_MAP.find(c => c.value === val);
+    const entry = activeCedantMap.find(c => c.value === val);
     updateForm("cedant", val);
     updateForm("primary_key_col", entry?.key ?? "");
+  };
+
+  // Called when user edits the DOL or COB part individually
+  const handleCompositePartChange = (part, value) => {
+    const current = form.primary_key_col || selectedEntry?.key || "|";
+    const parts   = current.split("|");
+    if (part === "dol") parts[0] = value;
+    else                parts[1] = value;
+    updateForm("primary_key_col", parts.join("|"));
   };
 
   const handleSubmit = () => {
@@ -339,28 +417,76 @@ export default function ComparePage({ onNavigate }) {
                 <select id="cedant_local" value={form.cedant}
                   onChange={e => handleCedantChange(e.target.value)}
                   disabled={loading} className={SEL + " pr-8"}>
-                  {CEDANT_MAP.map(c => (
+                  {activeCedantMap.map(c => (
                     <option key={c.value} value={c.value}>{c.label}</option>
                   ))}
                 </select>
                 <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
               </div>
 
-              {/* Auto-filled PK hint — no editable raw field */}
+              {/* Auto-filled PK hint */}
               {selectedEntry?.key ? (
-                <div className="flex items-center gap-1.5 mt-1.5 bg-teal-50 border border-teal-100 rounded-lg px-3 py-1.5">
-                  <InformationCircleIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
-                  <span className="text-xs text-teal-700">
-                    Identifier otomatis: <strong className="font-mono">{selectedEntry.key}</strong>
-                  </span>
-                </div>
+                isComposite ? (
+                  <div className="mt-1.5 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 flex flex-col gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <InformationCircleIcon className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
+                      <span className="text-xs font-semibold text-blue-700">
+                        InfoPack: Primary Key = DOL + COB (composite)
+                      </span>
+                    </div>
+                    <p className="text-xs text-blue-600 leading-relaxed">
+                      Nilai <strong>tanggal kejadian</strong> dan <strong>kelas bisnis</strong> digabung otomatis
+                      sebagai identifier unik. Sesuaikan nama kolom di bawah jika berbeda dari file kamu.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 mt-1.5 bg-teal-50 border border-teal-100 rounded-lg px-3 py-1.5">
+                    <InformationCircleIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
+                    <span className="text-xs text-teal-700">
+                      Identifier otomatis: <strong className="font-mono">{selectedEntry.key}</strong>
+                    </span>
+                  </div>
+                )
               ) : (
                 <p className="text-xs text-gray-400 mt-1">Pilih cedant agar kolom identifier terisi otomatis.</p>
               )}
             </div>
 
-            {/* Manual PK override — only shown if cedant selected but user needs to correct */}
-            {form.cedant && (
+            {/* PK override — composite (InfoPack) vs single (OS) */}
+            {form.cedant && isComposite ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-semibold text-gray-600">
+                  Kolom DOL &amp; COB <span className="text-gray-400 font-normal">(sesuaikan jika nama kolom di file berbeda)</span>
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom DOL</label>
+                    <input type="text"
+                      value={(form.primary_key_col || selectedEntry?.key || "").split("|")[0] ?? dolPart}
+                      onChange={e => handleCompositePartChange("dol", e.target.value)}
+                      disabled={loading}
+                      placeholder={dolPart || "Date Of Loss"}
+                      className={SEL + " font-mono text-xs"}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom COB</label>
+                    <input type="text"
+                      value={(form.primary_key_col || selectedEntry?.key || "").split("|")[1] ?? cobPart}
+                      onChange={e => handleCompositePartChange("cob", e.target.value)}
+                      disabled={loading}
+                      placeholder={cobPart || "COB"}
+                      className={SEL + " font-mono text-xs"}
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-400">
+                  Key yang dikirim: <code className="font-mono bg-gray-100 px-1 rounded">
+                    {form.primary_key_col || selectedEntry?.key || "—"}
+                  </code>
+                </p>
+              </div>
+            ) : form.cedant ? (
               <div>
                 <Label htmlFor="pk_col" text="Koreksi Kolom Identifier (jika perlu)" />
                 <input id="pk_col" type="text"
@@ -374,7 +500,7 @@ export default function ComparePage({ onNavigate }) {
                   Edit hanya jika kolom di file berbeda dari mapping di atas. Biasanya tidak perlu diubah.
                 </p>
               </div>
-            )}
+            ) : null}
 
             {/* Step 4: Sheet selector */}
             {sheets.length > 0 && (
@@ -495,7 +621,7 @@ export default function ComparePage({ onNavigate }) {
               <Label text="Cedant / Sumber" />
               <div className="relative">
                 <select value={driveCedant} onChange={e => setDriveCedant(e.target.value)} className={SEL + " pr-8"}>
-                  {CEDANT_MAP.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  {activeCedantMap.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
                 <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
               </div>

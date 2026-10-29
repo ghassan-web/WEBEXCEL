@@ -37,8 +37,8 @@ async def upload_and_compare(
     session_id:      str           = Depends(get_session_id),
 ):
     for f, label in [(file_a, "File A"), (file_b, "File B")]:
-        if not f.filename.endswith((".xlsx", ".xls")):
-            raise HTTPException(status_code=400, detail=f"{label} harus berformat .xlsx atau .xls")
+        if not f.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
+            raise HTTPException(status_code=400, detail=f"{label} harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
 
     bytes_a = await file_a.read()
     bytes_b = await file_b.read()
@@ -254,8 +254,8 @@ def download_report(
 # ─────────────────────────────────────────────
 @router.post("/sheets", summary="Ambil daftar sheet dari file Excel")
 async def get_sheets(file: UploadFile = File(...)):
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="File harus .xlsx atau .xls")
+    if not file.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
+        raise HTTPException(status_code=400, detail="File harus .xlsx, .xls, .xlsm, atau .xlsb")
     data = await file.read()
     try:
         sheets = get_sheet_names(data)

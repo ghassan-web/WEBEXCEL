@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..models import get_db, get_session_id, UploadJob, MasterData
-from ..services.excel_service import ingest_excel
+from ..services.excel_service import ingest_excel, ingest_kbins, KBINS_TIPE_DATA
 
 router = APIRouter(prefix="/api/master", tags=["master"])
 logger = logging.getLogger(__name__)
@@ -37,8 +37,8 @@ async def upload_to_master(
     db:              Session       = Depends(get_db),
     session_id:      str           = Depends(get_session_id),
 ):
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="File harus berformat .xlsx atau .xls")
+    if not file.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
+        raise HTTPException(status_code=400, detail="File harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
 
     file_bytes = await file.read()
     if len(file_bytes) > MAX_FILE_SIZE:
@@ -61,8 +61,26 @@ async def upload_to_master(
     db.refresh(job)
 
     # ── Ingest file ──
+    # KB INS menggunakan XLS terenkripsi password — pakai ingest_kbins.
+    # Semua cedant lain pakai ingest_excel biasa.
+    is_kbins = (cedant or "").strip().upper().startswith("KB INS")
     try:
-        result = ingest_excel(file_bytes, primary_key_col.strip(), sheet_name or None)
+        if is_kbins:
+            from msoffcrypto.exceptions import InvalidKeyError
+            try:
+                result = ingest_kbins(file_bytes, cedant or "")
+            except InvalidKeyError:
+                job.status = "error"
+                job.error_message = "Password Excel salah. Pastikan EXCEL_PASSWORD di .env sudah benar."
+                db.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password Excel salah. Pastikan EXCEL_PASSWORD di .env sudah benar.",
+                )
+        else:
+            result = ingest_excel(file_bytes, primary_key_col.strip(), sheet_name or None)
+    except HTTPException:
+        raise
     except ValueError as e:
         job.status = "error"
         job.error_message = str(e)
@@ -74,6 +92,10 @@ async def upload_to_master(
         job.error_message = str(e)
         db.commit()
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal: {str(e)}")
+
+    # ── Update sheet_name di job sesuai sheet yang benar-benar dibaca ──
+    job.sheet_name = result.get("sheet") or job.sheet_name
+    db.commit()
 
     # ── Append ke master_data — dedup hanya dalam session yang sama ──
     appended = 0

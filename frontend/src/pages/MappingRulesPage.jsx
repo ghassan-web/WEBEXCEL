@@ -77,6 +77,7 @@ const PROFILES_OS = [
   { col:"BG", cedant:"JBGDA (Broker)",     sheetMet:"ACA",                                 lossRef:"No. Ref Alliata",        outstanding:"OS INDORE",                        dateOfLoss:"DOL",                 status:"READY"      },
   { col:"BH", cedant:"JCR (Broker)",       sheetMet:"rencana rékons aguntua",              lossRef:"DLA JCR",                outstanding:"jumlah",                           dateOfLoss:"DOL",                 status:"READY"      },
   { col:"BI", cedant:"KB INS",             sheetMet:"RENDO",                               lossRef:"Claim No.",              outstanding:"Remain OS in 1005",                dateOfLoss:"DOL",                 status:"READY"      },
+  { col:"KBINS-NONPROP", cedant:"KB INS (Non-Proportional)", sheetMet:"2.11",             lossRef:"Claim No",               outstanding:"Sum of XOL",                       dateOfLoss:"Date Of Loss",        status:"READY"      },
   { col:"KBRU", cedant:"KBRU (Broker)",    sheetMet:"Sheet1",                              lossRef:"REFF CLAIM",             outstanding:"AMOUNT SHARES REAS",               dateOfLoss:"DATE LOSS",            status:"READY"      },
   { col:"BK", cedant:"LINKS RE (Broker)",  sheetMet:"Sheet1",                              lossRef:"(LINKS-RE) CLAIM NUMBER", outstanding:"CLAIMS SHARE",                    dateOfLoss:"DOL",                 status:"READY"      },
   { col:"BL", cedant:"LIPPO",              sheetMet:"Sheet1",                              lossRef:"No DLA / Claim",         outstanding:"Outstanding",                      dateOfLoss:"Date of Loss",        status:"READY"      },
@@ -116,9 +117,58 @@ const PROFILES_OS = [
 ];
 
 const PROFILES_INFOPACK = [
-  { col:"B",  cedant:"ABB",            sheetMet:"Sheet1",      lossRef:"AL_Index",    outstanding:"klaim",           dateOfLoss:"tg_kejadian",  status:"READY" },
-  { col:"C",  cedant:"ACA",            sheetMet:"Infopack",    lossRef:"RefNo",       outstanding:"Amount_Net_OS",   dateOfLoss:"DOL",          status:"READY" },
-  { col:"D",  cedant:"ADHI RE",        sheetMet:"Sheet1",      lossRef:"CLAIM NO",    outstanding:"TOTAL AMOUNT",    dateOfLoss:"DATE OF LOSS", status:"READY" },
+  { col:"B",  cedant:"ABB",           sheetMet:"Sheet1",   lossRef:"AL_Index",    outstanding:"klaim",              dateOfLoss:"tg_kejadian",      fields:["proportional","non proportional"], status:"READY" },
+  { col:"C",  cedant:"ACA",           sheetMet:"Infopack", lossRef:"RefNo",       outstanding:"Amount_Net_OS",      dateOfLoss:"DOL",              fields:["proportional","non proportional"], status:"READY" },
+  { col:"D",  cedant:"ADHI RE",       sheetMet:"Sheet1",   lossRef:"CLAIM NO",    outstanding:"TOTAL AMOUNT",       dateOfLoss:"DATE OF LOSS",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"E",  cedant:"AGGI",          sheetMet:"Sheet1",   lossRef:"CLAIM NO",    outstanding:"DUE TO INSUL / US",  dateOfLoss:"DATE OF LOSS",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"F",  cedant:"AON (Broker)",  sheetMet:"Sheet1",   lossRef:"Contract Code", outstanding:"Orig Currency Amt", dateOfLoss:"Trans Desc/DOL",  fields:["proportional","non proportional"], status:"READY" },
+  { col:"G",  cedant:"ASIB",          sheetMet:"Sheet1",   lossRef:"No. DLA / Ribu / Nota", outstanding:"OS Original Currency", dateOfLoss:"Tgl. DOL", fields:["proportional","non proportional"], status:"READY" },
+  { col:"H",  cedant:"ASKRINDO",      sheetMet:"Sheet1",   lossRef:"DLA/FLA",     outstanding:"Hutang sd 2024",     dateOfLoss:"DOL",              fields:["proportional","non proportional"], status:"READY" },
+  { col:"I",  cedant:"ASTRARAHANA",   sheetMet:"Sheet1",   lossRef:"ClaimNo",     outstanding:"AllAmount",          dateOfLoss:"DOCL",             fields:["proportional","non proportional"], status:"READY" },
+  { col:"J",  cedant:"AVRIST",        sheetMet:"Sheet1",   lossRef:"CLAIM NUMBER", outstanding:"OUTSTANDING",       dateOfLoss:"DATE OF LOSS",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"K",  cedant:"AXA",           sheetMet:"Sheet1",   lossRef:"Ref No.",     outstanding:"Sum of Outstanding", dateOfLoss:"(Tidak tersedia)", fields:["proportional","non proportional"], status:"READY" },
+  { col:"L",  cedant:"BCA INSURANCE", sheetMet:"Sheet1",   lossRef:"Reference No.", outstanding:"Outstanding Amount", dateOfLoss:"Date of Loss",   fields:["proportional","non proportional"], status:"READY" },
+  { col:"M",  cedant:"BINTANG",       sheetMet:"Sheet1",   lossRef:"Claim Number", outstanding:"R/I Share Amount", dateOfLoss:"DOL",              fields:["proportional","non proportional"], status:"READY" },
+  { col:"N",  cedant:"BRINS",         sheetMet:"Sheet1",   lossRef:"domino",      outstanding:"Nihilpng",           dateOfLoss:"(Tidak tersedia)", fields:["proportional","non proportional"], status:"READY" },
+  { col:"O",  cedant:"CHINA TAIPING", sheetMet:"Sheet1",   lossRef:"Claim No.",   outstanding:"Reinsurer Origin Share", dateOfLoss:"(Tidak tersedia)", fields:["proportional","non proportional"], status:"READY" },
+  { col:"P",  cedant:"ETIGA",         sheetMet:"RENDO",    lossRef:"Reference No.", outstanding:"Net O/S",          dateOfLoss:"Loss Date",        fields:["proportional","non proportional"], status:"READY" },
+  { col:"Q",  cedant:"FPG",           sheetMet:"Sheet1",   lossRef:"Document No.", outstanding:"Amount Net O/S FPG", dateOfLoss:"Date of Loss",   fields:["proportional","non proportional"], status:"READY" },
+  { col:"R",  cedant:"GEGI",          sheetMet:"Outstanding", lossRef:"CLAIM NO", outstanding:"NET_AMT",            dateOfLoss:"DOL",              fields:["proportional","non proportional"], status:"READY" },
+  { col:"S",  cedant:"HARTA AMAN",    sheetMet:"DETAILS",  lossRef:"Reference No.", outstanding:"Outstanding Original Currency", dateOfLoss:"DOL", fields:["proportional","non proportional"], status:"READY" },
+  { col:"T",  cedant:"JASA RAHARJA",  sheetMet:"Sheet1",   lossRef:"REF NO",      outstanding:"AMOUNT NET O/S",     dateOfLoss:"DATE OF LOSS",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"U",  cedant:"JASINDO",       sheetMet:"Sheet1",   lossRef:"Reference",   outstanding:"Saldo Akhir Tagih",  dateOfLoss:"Date of Loss",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"JASTAN",           cedant:"JASTAN",                    sheetMet:"1.3 List OS Losses", lossRef:"Claim No",          outstanding:"Gross Incurred Est*)", dateOfLoss:"Date of Loss",     fields:["proportional"],     status:"READY" },
+  { col:"JASTAN-NP",        cedant:"JASTAN (Non-Proportional)", sheetMet:"Exhibit 4.1",        lossRef:"Insured",           outstanding:"Losses to the XL",    dateOfLoss:"Date of Loss",     fields:["non proportional"], status:"READY" },
+  // v.01
+  { col:"JASTAN-NP-LL",     cedant:"JASTAN (Non-Proportional)", sheetMet:"Large Losses",       lossRef:"Name of Insured",   outstanding:"Net Retained",        dateOfLoss:"Date of Loss",     fields:["non proportional"], status:"READY" },
+  { col:"JASTAN-NP-EQ",     cedant:"JASTAN (Non-Proportional)", sheetMet:"Cat Losses - EQ",    lossRef:"CLAIM REF. NO.",    outstanding:"OUTSTANDING LOSS",    dateOfLoss:"(Tidak tersedia)", fields:["non proportional"], status:"READY" },
+  { col:"JASTAN-NP-FL",     cedant:"JASTAN (Non-Proportional)", sheetMet:"Cat Losses - FL",    lossRef:"CLAIM REF. NO.",    outstanding:"OUTSTANDING LOSS",    dateOfLoss:"(Tidak tersedia)", fields:["non proportional"], status:"READY" },
+  { col:"JASTAN-NP-RSMD",   cedant:"JASTAN (Non-Proportional)", sheetMet:"Cat Losses - RSMD",  lossRef:"CLAIM REF. NO.",    outstanding:"OUTSTANDING LOSS",    dateOfLoss:"(Tidak tersedia)", fields:["non proportional"], status:"READY" },
+  // v.02
+  { col:"JASTAN-NP-LL-V2",  cedant:"JASTAN (Non-Proportional)", sheetMet:"Large Losses",       lossRef:"Name of Insured",   outstanding:"Net Retained",        dateOfLoss:"Date of Loss",     fields:["non proportional"], status:"READY" },
+  { col:"JASTAN-NP-EQ-V2",  cedant:"JASTAN (Non-Proportional)", sheetMet:"Cat Losses - EQ",    lossRef:"CLAIM REF. NO.",    outstanding:"OUTSTANDING LOSS",    dateOfLoss:"DATE OF LOSS",     fields:["non proportional"], status:"READY" },
+  { col:"JASTAN-NP-FL-V2",  cedant:"JASTAN (Non-Proportional)", sheetMet:"Cat Losses - FL",    lossRef:"CLAIM REF. NO.",    outstanding:"OUTSTANDING LOSS",    dateOfLoss:"DATE OF LOSS",     fields:["non proportional"], status:"READY" },
+  { col:"JASTAN-NP-RSMD-V2",cedant:"JASTAN (Non-Proportional)", sheetMet:"Cat Losses - RSMD",  lossRef:"CLAIM REF. NO.",    outstanding:"OUTSTANDING LOSS",    dateOfLoss:"DATE OF LOSS",     fields:["non proportional"], status:"READY" },
+  { col:"KARK-PROP",    cedant:"KARK (Proportional)",       sheetMet:"List Realisasi",     lossRef:"Insured",           outstanding:"Claim OS",            dateOfLoss:"(Tidak tersedia)",   fields:["proportional"],     status:"READY" },
+  { col:"KARK-NONPROP", cedant:"KARK (Non-Proportional)",  sheetMet:"5.1",                lossRef:"Insured Name",      outstanding:"CLAIM HIT TO THE LAYER", dateOfLoss:"Loss Date",        fields:["non proportional"], status:"READY" },
+  { col:"KBINS-PROP",  cedant:"KB INS (Proportional)",    sheetMet:"2.11",               lossRef:"Claim No",          outstanding:"Sum of ANR",          dateOfLoss:"Date Of Loss",     fields:["proportional"],     status:"READY" },
+  { col:"KBINS-NONPROP", cedant:"KB INS (Non-Proportional)", sheetMet:"2.11",             lossRef:"Claim No",          outstanding:"Sum of XOL",          dateOfLoss:"Date Of Loss",     fields:["non proportional"], status:"READY" },
+  { col:"LIPPO-PROP",     cedant:"LIPPO (Proportional)",     sheetMet:"Exhibit 5.1",  lossRef:"Claim No",       outstanding:"Claim O/S",        dateOfLoss:"Loss Date",           fields:["proportional"],     status:"READY" },
+  { col:"LIPPO-PROP-CAT", cedant:"LIPPO (Proportional)",     sheetMet:"Exhibit 5.2",  lossRef:"Event Name",     outstanding:"Claim O/S",        dateOfLoss:"(Tidak tersedia)",    fields:["proportional"],     status:"READY" },
+  { col:"LIPPO-NONPROP-LL",  cedant:"LIPPO (Non-Proportional)", sheetMet:"Exhibit 5.1",  lossRef:"Insured Name",   outstanding:"Losses to the XL", dateOfLoss:"Date of Loss",        fields:["non proportional"], status:"READY" },
+  { col:"LIPPO-NONPROP-CAT", cedant:"LIPPO (Non-Proportional)", sheetMet:"Exhibit 5.2",  lossRef:"Event Name",     outstanding:"Losses to the XL", dateOfLoss:"(Tidak tersedia)",    fields:["non proportional"], status:"READY" },
+  { col:"X",  cedant:"MAG",           sheetMet:"Sheet1",   lossRef:"REFNO",       outstanding:"AMOUNT NET O/S",     dateOfLoss:"DATE OF LOSS",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"Y",  cedant:"MNC",           sheetMet:"Sheet1",   lossRef:"CLAIM NO",    outstanding:"RI_PAID (ORI)",      dateOfLoss:"LOSS DATE",        fields:["proportional","non proportional"], status:"READY" },
+  { col:"Z",  cedant:"MPM",           sheetMet:"Sheet1",   lossRef:"Name Ref No.", outstanding:"OS Obj – Curr",    dateOfLoss:"Date of Loss",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"AA", cedant:"OONA",          sheetMet:"Sheet1",   lossRef:"Slip No./DLA No.", outstanding:"Netto / Due To Us / (You)", dateOfLoss:"D.O.L", fields:["proportional","non proportional"], status:"READY" },
+  { col:"AB", cedant:"RAMAYANA",      sheetMet:"Sheet1",   lossRef:"NO. DLA",     outstanding:"IDR",                dateOfLoss:"D.O.L",            fields:["proportional","non proportional"], status:"READY" },
+  { col:"AC", cedant:"SAMSUNG TUGU",  sheetMet:"Sheet1",   lossRef:"INVOICE NO",  outstanding:"OAC AMT",            dateOfLoss:"(Tidak tersedia)", fields:["proportional","non proportional"], status:"READY" },
+  { col:"AD", cedant:"SINAR MAS",     sheetMet:"Sheet1",   lossRef:"No. Invoice", outstanding:"Due To ASM",         dateOfLoss:"dol",              fields:["proportional","non proportional"], status:"READY" },
+  { col:"AE", cedant:"SOMPO",         sheetMet:"Sheet1",   lossRef:"OUR DEBT/CREDIT NO.", outstanding:"OUTSTANDING", dateOfLoss:"DATE OF LOSS",   fields:["proportional","non proportional"], status:"READY" },
+  { col:"AF", cedant:"TOKIO MARINE",  sheetMet:"Sheet1",   lossRef:"CLAIM NO.",   outstanding:"CLAIM PAID",         dateOfLoss:"DATE OF LOSS",     fields:["proportional","non proportional"], status:"READY" },
+  { col:"AG", cedant:"TPI",           sheetMet:"Sheet1",   lossRef:"Claim Number", outstanding:"Amount",            dateOfLoss:"(Tidak tersedia)", fields:["proportional","non proportional"], status:"READY" },
+  { col:"AH", cedant:"UMUM MEGA",     sheetMet:"Sheet1",   lossRef:"REFNO",       outstanding:"OS",                 dateOfLoss:"LOSSDATE",         fields:["proportional","non proportional"], status:"READY" },
+  { col:"AI", cedant:"VIDEI",         sheetMet:"Sheet1",   lossRef:"No. DLA",     outstanding:"TOTAL KLAIM",        dateOfLoss:"DOL",              fields:["proportional","non proportional"], status:"READY" },
 ];
 
 /* ─── ACA column detail (dari file Excel O88RI00002) ─────── */
@@ -176,7 +226,8 @@ export default function MappingRulesPage() {
       || p.sheetMet.toLowerCase().includes(q)
       || p.lossRef.toLowerCase().includes(q)
       || p.outstanding.toLowerCase().includes(q)
-      || p.col.toLowerCase().includes(q);
+      || p.col.toLowerCase().includes(q)
+      || (p.fields || []).some(f => f.toLowerCase().includes(q));
   });
 
   const readyCount = profiles.filter(p => p.status === "READY").length;
@@ -331,13 +382,18 @@ export default function MappingRulesPage() {
                   <th className="px-3 py-2.5 text-left font-semibold text-blue-500 uppercase tracking-wide">
                     <span className="inline-flex items-center gap-1"><CalendarIcon className="h-3 w-3" /> Date of Loss</span>
                   </th>
+                  {activeTab === "infopack" && (
+                    <th className="px-3 py-2.5 text-left font-semibold text-indigo-500 uppercase tracking-wide">
+                      Field
+                    </th>
+                  )}
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-center py-12 text-gray-400">
+                    <td colSpan={activeTab === "infopack" ? 8 : 7} className="text-center py-12 text-gray-400">
                       Tidak ada profil yang cocok dengan pencarian.
                     </td>
                   </tr>
@@ -370,6 +426,16 @@ export default function MappingRulesPage() {
                     <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">
                       {p.dateOfLoss}
                     </td>
+                    {/* Field (proportional / non proportional) — InfoPack only */}
+                    {activeTab === "infopack" && (
+                      <td className="px-3 py-1.5">
+                        <div className="flex flex-col gap-0.5">
+                          {(p.fields || []).map((f, fi) => (
+                            <span key={fi} className="text-xs text-gray-500">{f}</span>
+                          ))}
+                        </div>
+                      </td>
+                    )}
                     {/* Status */}
                     <td className="px-3 py-1.5">
                       {p.status === "READY" ? (

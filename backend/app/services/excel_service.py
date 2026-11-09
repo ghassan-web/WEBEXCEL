@@ -116,23 +116,82 @@ def read_kbins_sheet(file_bytes: bytes) -> pd.DataFrame:
 
 
 def _get_engine(file_bytes: bytes) -> Optional[str]:
-    """Return the correct pandas engine based on file magic bytes / extension hint."""
-    # .xlsb magic: starts with D0 CF 10 E0 (OLE2) but pyxlsb handles the inner XLSB stream
-    # The safest way is to try opening with pyxlsb first for binary workbooks.
-    # We detect by trying pd.ExcelFile with pyxlsb; fall back to openpyxl/xlrd.
-    try:
-        pd.ExcelFile(BytesIO(file_bytes), engine="pyxlsb")
-        return "pyxlsb"
-    except Exception:
-        return None   # let pandas auto-detect (openpyxl for .xlsx, xlrd for .xls)
+    """
+    Detect the correct pandas engine by inspecting magic bytes, then trying
+    each engine in order. Returns the first engine that opens the file
+    successfully, or raises ValueError if none work.
+
+    Priority:
+      1. pyxlsb  — .xlsb Binary Workbook  (magic: D0 CF … or special XLSB)
+      2. xlrd    — legacy .xls (OLE2, magic: D0 CF 11 E0 A1 B1 1A E1)
+      3. openpyxl — .xlsx / .xlsm (ZIP magic: PK)
+      4. None    — let pandas auto-detect as last resort (should rarely reach here)
+    """
+    # Magic-byte based fast path
+    header = file_bytes[:8]
+
+    OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+    ZIP_MAGIC  = b"PK"
+
+    if header[:8] == OLE2_MAGIC:
+        # OLE2 container — could be .xls or encrypted .xlsb/.xlsx
+        # Try xlrd first (handles plain .xls), then pyxlsb
+        for engine in ("xlrd", "pyxlsb"):
+            try:
+                pd.ExcelFile(BytesIO(file_bytes), engine=engine)
+                return engine
+            except Exception:
+                pass
+        # Give up — caller will handle the error
+        return None
+
+    if header[:2] == ZIP_MAGIC:
+        # ZIP-based (.xlsx / .xlsm / .xlsb)
+        # Try pyxlsb first (it handles .xlsb which is also ZIP-based in newer Excel)
+        try:
+            pd.ExcelFile(BytesIO(file_bytes), engine="pyxlsb")
+            return "pyxlsb"
+        except Exception:
+            pass
+        # Fall back to openpyxl for standard .xlsx / .xlsm
+        try:
+            pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
+            return "openpyxl"
+        except Exception:
+            pass
+        return None
+
+    # Unknown magic — try all engines in order
+    for engine in ("openpyxl", "xlrd", "pyxlsb"):
+        try:
+            pd.ExcelFile(BytesIO(file_bytes), engine=engine)
+            return engine
+        except Exception:
+            pass
+
+    return None
 
 
 def _open_excel_file(file_bytes: bytes) -> Tuple[pd.ExcelFile, Optional[str]]:
-    """Open an Excel file with the correct engine, returning (ExcelFile, engine)."""
+    """
+    Open an Excel file with the correct engine, returning (ExcelFile, engine).
+    Raises ValueError with a clear message if no engine can read the file.
+    """
     engine = _get_engine(file_bytes)
+
     if engine:
         return pd.ExcelFile(BytesIO(file_bytes), engine=engine), engine
-    return pd.ExcelFile(BytesIO(file_bytes)), None
+
+    # Last resort: let pandas auto-detect (very old or unusual format)
+    try:
+        xls = pd.ExcelFile(BytesIO(file_bytes))
+        return xls, None
+    except Exception as exc:
+        raise ValueError(
+            "Format file Excel tidak dapat dideteksi secara otomatis. "
+            "Pastikan file adalah .xlsx, .xls, atau .xlsb yang valid dan tidak corrupt. "
+            f"Detail teknis: {exc}"
+        ) from exc
 
 
 def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 100) -> int:
@@ -149,8 +208,24 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 100) ->
     engine = _get_engine(file_bytes)
     kwargs = {"engine": engine} if engine else {}
 
-    raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
-                        header=None, dtype=str, nrows=max_scan, **kwargs)
+    try:
+        raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
+                            header=None, dtype=str, nrows=max_scan, **kwargs)
+    except Exception:
+        # If auto-detect failed, try each engine explicitly
+        raw = None
+        for eng in ("openpyxl", "xlrd", "pyxlsb"):
+            if eng == engine:
+                continue
+            try:
+                raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
+                                    header=None, dtype=str, nrows=max_scan, engine=eng)
+                kwargs = {"engine": eng}
+                break
+            except Exception:
+                pass
+        if raw is None:
+            return 0  # fallback: assume header is on row 0
     raw = raw.fillna("")
 
     best_row   = 0
@@ -627,6 +702,9 @@ def ingest_excel(
     — both column names are looked up (case-insensitive), their values are
       joined with '__' and stored as the primary_key_value.
 
+    Jika primary_key_col kosong (""), kolom pertama dari file dipakai sebagai
+    primary key (auto-detect mode).
+
     Returns:
     {
         "sheet": str,
@@ -635,6 +713,12 @@ def ingest_excel(
     }
     """
     df, actual_sheet = _read_excel(file_bytes, sheet_name)
+
+    # ── Auto-detect: gunakan kolom pertama jika pk kosong ───────────────
+    if not primary_key_col or not primary_key_col.strip():
+        if df.empty or len(df.columns) == 0:
+            raise ValueError("File tidak memiliki kolom — tidak bisa auto-detect primary key.")
+        primary_key_col = str(df.columns[0])
 
     if _is_composite(primary_key_col):
         # ── Composite key (e.g. "DOL|COB") ──────────────────────────────

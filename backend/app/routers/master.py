@@ -30,7 +30,7 @@ async def upload_to_master(
     bulan:           str           = Form(...),
     tahun:           str           = Form(...),
     tipe_data:       str           = Form(...),
-    primary_key_col: str           = Form(...),
+    primary_key_col: Optional[str] = Form(None),
     cedant:          Optional[str] = Form(None),
     sheet_name:      Optional[str] = Form(None),
     file:            UploadFile    = File(...),
@@ -44,13 +44,16 @@ async def upload_to_master(
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File melebihi batas 50 MB")
 
+    # Normalisasi primary_key_col — None / kosong berarti auto-detect
+    pk_col = (primary_key_col or "").strip() or None
+
     # ── Buat upload job ──
     job = UploadJob(
         session_id=session_id,
         bulan=bulan,
         tahun=tahun,
         tipe_data=tipe_data,
-        primary_key_col=primary_key_col.strip(),
+        primary_key_col=pk_col or "",
         file_name=file.filename,
         sheet_name=sheet_name or None,
         cedant=cedant or None,
@@ -61,8 +64,6 @@ async def upload_to_master(
     db.refresh(job)
 
     # ── Ingest file ──
-    # KB INS menggunakan XLS terenkripsi password — pakai ingest_kbins.
-    # Semua cedant lain pakai ingest_excel biasa.
     is_kbins = (cedant or "").strip().upper().startswith("KB INS")
     try:
         if is_kbins:
@@ -78,7 +79,7 @@ async def upload_to_master(
                     detail="Password Excel salah. Pastikan EXCEL_PASSWORD di .env sudah benar.",
                 )
         else:
-            result = ingest_excel(file_bytes, primary_key_col.strip(), sheet_name or None)
+            result = ingest_excel(file_bytes, pk_col or "", sheet_name or None)
     except HTTPException:
         raise
     except ValueError as e:
@@ -115,6 +116,9 @@ async def upload_to_master(
             skipped += 1
             continue
         r["data"].setdefault("sheet", result["sheet"])
+        # Simpan cedant ke dalam row_data agar bisa di-lookup dari frontend
+        if cedant:
+            r["data"].setdefault("_cedant", cedant)
         batch.append(MasterData(
             session_id=session_id,
             tipe_data=tipe_data,

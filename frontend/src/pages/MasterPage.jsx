@@ -1,6 +1,7 @@
 // Master OS Claim Page — reads from master_data via /api/master/data
 import { useState, useEffect, useCallback } from "react";
 import { getMasterData, exportMasterCsv } from "../services/api";
+import { PROFILES_OS, PROFILES_INFOPACK } from "../services/mappingData";
 import {
   TableCellsIcon,
   ArrowDownTrayIcon,
@@ -68,18 +69,42 @@ export default function MasterPage() {
       return (val !== null && val !== undefined && String(val).trim() !== "") ? String(val) : "—";
     };
 
-    // ── Cedant ──────────────────────────────────────────────────────────
-    const cedantFromData = (() => {
-      const exactKey = keys.find(k => /^cedant$/i.test(k));
+    // ── Sheet — pakai sheet_name dari upload job, fallback ke row_data ──
+    const sheet = r.sheet_name || find(/^sheet$/i) || "—";
+
+    // ── Cedant — prioritas: field cedant dari DB → lookup via sheet ──────
+    const cedant = (() => {
+      // 1. Cedant tersimpan langsung di row (dikirim saat upload manual)
+      if (r.cedant && r.cedant.trim()) return r.cedant.trim();
+
+      // 2. Cari dari kolom _cedant atau cedant di dalam row_data
+      const exactKey = keys.find(k => /^_?cedant$/i.test(k));
       if (exactKey) {
         const val = String(d[exactKey] ?? "").trim();
         if (val && val !== r.tipe_data) return val;
       }
-      return null;
-    })();
 
-    // ── Sheet — pakai sheet_name dari upload job (paling akurat) ────────
-    const sheet = r.sheet_name || find(/^sheet$/i) || "—";
+      // 3. Lookup dari PROFILES berdasarkan sheet_name
+      const profiles = tipeData === "Infopack" ? PROFILES_INFOPACK : PROFILES_OS;
+      const sheetToMatch = r.sheet_name || (find(/^sheet$/i) !== "—" ? find(/^sheet$/i) : null);
+      if (sheetToMatch) {
+        const match = profiles.find(p =>
+          p.sheetMet?.toLowerCase() === sheetToMatch.toLowerCase()
+        );
+        if (match?.cedant) return match.cedant;
+      }
+
+      // 4. Lookup dari primary_key_value — cocokkan lossRef di profiles
+      const pkVal = r.primary_key_value ?? "";
+      if (pkVal) {
+        const matchByPk = profiles.find(p =>
+          p.lossRef && pkVal.toLowerCase().startsWith(p.lossRef.toLowerCase().slice(0, 4))
+        );
+        if (matchByPk?.cedant) return matchByPk.cedant;
+      }
+
+      return "—";
+    })();
 
     // ── Outstanding — per-cedant mapping dari MappingRules ──────────────
     // Nama kolom bervariasi: "Orig Currency Amt", "Amount_Net_OS", "OUTSTANDING", dst.
@@ -154,7 +179,7 @@ export default function MasterPage() {
     })();
 
     return {
-      cedant:      r.cedant || cedantFromData || "—",
+      cedant,
       sheet,
       lossRef:     r.primary_key_value ?? "—",
       outstanding,

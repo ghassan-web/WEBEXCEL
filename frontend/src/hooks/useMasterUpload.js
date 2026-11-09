@@ -33,7 +33,12 @@ export function useMasterUpload() {
     if (f) {
       try {
         const data = await getSheetNames(f);
-        setSheets(data.sheets || []);
+        const sheetList = data.sheets || [];
+        setSheets(sheetList);
+        // Auto-select jika hanya ada 1 sheet
+        if (sheetList.length === 1) {
+          updateForm("sheet_name", sheetList[0]);
+        }
       } catch (_) {}
     }
   }, [updateForm]);
@@ -48,12 +53,15 @@ export function useMasterUpload() {
   }, []);
 
   const submit = useCallback(async () => {
-    if (!form.bulan)                  return setError("Bulan Cut-Off wajib dipilih.");
-    if (!form.tahun)                  return setError("Tahun wajib dipilih.");
-    if (!form.tipe_data)              return setError("Jenis Data wajib dipilih.");
-    if (!form.cedant)                 return setError("Cedant / Sumber wajib dipilih agar nama cedant tersimpan dengan benar.");
-    if (!form.primary_key_col.trim()) return setError("Kolom Primary Key wajib diisi. Pilih Cedant atau ketik nama kolom secara manual.");
-    if (!file)                        return setError("File Excel wajib diunggah lewat drop zone.");
+    if (!form.bulan)     return setError("Bulan Cut-Off wajib dipilih.");
+    if (!form.tahun)     return setError("Tahun wajib dipilih.");
+    if (!form.tipe_data) return setError("Jenis Data wajib dipilih.");
+    if (!file)           return setError("File Excel wajib diunggah lewat drop zone.");
+
+    // Cedant opsional — jika diisi, PK harus ada
+    if (form.cedant && !form.primary_key_col.trim()) {
+      return setError("Kolom Primary Key wajib diisi. Pilih profil sheet atau ketik nama kolom secara manual.");
+    }
 
     setError(null);
     setLoading(true);
@@ -62,10 +70,13 @@ export function useMasterUpload() {
 
     try {
       const fd = new FormData();
-      fd.append("bulan",           form.bulan);
-      fd.append("tahun",           form.tahun);
-      fd.append("tipe_data",       form.tipe_data);
-      fd.append("primary_key_col", form.primary_key_col.trim());
+      fd.append("bulan",     form.bulan);
+      fd.append("tahun",     form.tahun);
+      fd.append("tipe_data", form.tipe_data);
+      // Hanya kirim primary_key_col jika cedant dipilih dan PK terisi
+      if (form.cedant && form.primary_key_col.trim()) {
+        fd.append("primary_key_col", form.primary_key_col.trim());
+      }
       if (form.cedant)     fd.append("cedant",     form.cedant);
       if (form.sheet_name) fd.append("sheet_name", form.sheet_name);
       fd.append("file", file);

@@ -422,17 +422,6 @@ export default function OSCLNPage() {
                 {uploading ? "Mengunggah…" : "⊕ Upload OSCLN CSV"}
               </button>
             </div>
-
-            {/* Google Drive import */}
-            <div>
-              <p className="text-xs font-semibold text-gray-600 mb-1.5">Atau import CSV yang sudah ada di Google Drive</p>
-              <input type="url" placeholder="https://drive.google.com/file/d/…/view"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white" />
-              <button type="button"
-                className="mt-2 flex items-center gap-2 border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 text-xs font-semibold px-4 py-2 rounded-lg transition-colors">
-                ⊞ Import from Drive
-              </button>
-            </div>
           </div>
 
           {/* ══ RIGHT: Reconciliation Setup ══ */}

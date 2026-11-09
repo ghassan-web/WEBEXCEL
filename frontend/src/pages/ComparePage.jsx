@@ -1,20 +1,19 @@
-import { useState, useRef } from "react";
+﻿import { useState, useRef, useEffect } from "react";
 import { useMasterUpload } from "../hooks/useMasterUpload";
+import { PROFILES_OS, PROFILES_INFOPACK } from "../services/mappingData";
 import {
   ArrowUpTrayIcon,
   ArrowPathIcon,
   CheckCircleIcon,
   ExclamationCircleIcon,
   CloudArrowUpIcon,
-  FolderOpenIcon,
   DocumentIcon,
   XCircleIcon,
   CalendarIcon,
   InformationCircleIcon,
-  LightBulbIcon,
 } from "@heroicons/react/24/outline";
 
-/* ─── constants ──────────────────────────────────────── */
+/* ─── constants ─────────────────────────────────────────── */
 const MONTHS_EN = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
@@ -28,243 +27,13 @@ const YEARS = Array.from({ length: 6 }, (_, i) => String(new Date().getFullYear(
 
 const SEL = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-50 disabled:text-gray-400 transition appearance-none";
 
-/* ─── Cedant → primary key map  (OS Claim Cedant) ────── */
-const CEDANT_MAP = [
-  { value: "", label: "— Pilih Cedant / Sumber —", key: "", hint: "" },
-  { value: "ABB", label: "ABB", key: "AL_Index", hint: "Kolom: AL_Index" },
-  { value: "ACA", label: "ACA", key: "RefNo", hint: "Kolom: RefNo" },
-  { value: "ADB (Non-Proportional)", label: "ADB (Non-Proportional)", key: "CLAIM NO.", hint: "Kolom: CLAIM NO. (sheet List of OS claim)" },
-  { value: "ADB Travel (Non-Proportional)", label: "ADB Travel (Non-Proportional)", key: "CLAIM NO.", hint: "Kolom: CLAIM NO. (sheet List of OS claim)" },
-  { value: "ADHI RE", label: "ADHI RE", key: "CLAIM NO", hint: "Kolom: CLAIM NO" },
-  { value: "AHIB", label: "AHIB", key: "CLAIM NO", hint: "Kolom: CLAIM NO" },
-  { value: "AON", label: "AON", key: "Claim Code", hint: "Kolom: Claim Code" },
-  { value: "AON (Broker)", label: "AON (Broker)", key: "Contract Code", hint: "Kolom: Contract Code" },
-  { value: "API RE (Broker)", label: "API RE (Broker)", key: "FLA / GLA APRE", hint: "Kolom: FLA / GLA APRE" },
-  { value: "ASIB", label: "ASIB", key: "No. DLA / Ribu / Nota", hint: "Kolom: No. DLA / Ribu / Nota" },
-  { value: "ASM", label: "ASM", key: "DLA_FLA_DIBAI", hint: "Kolom: DLA_FLA_DIBAI" },
-  { value: "BINTANG", label: "BINTANG", key: "Claim Number", hint: "Kolom: Claim Number" },
-  { value: "BRINS", label: "BRINS", key: "domino", hint: "Kolom: domino" },
-  { value: "CHINA TAIPING", label: "CHINA TAIPING", key: "Claim No.", hint: "Kolom: Claim No." },
-  { value: "DAYIN", label: "DAYIN", key: "REFNO", hint: "Kolom: REFNO" },
-  { value: "ENERGY RE", label: "ENERGY RE", key: "Ref No.", hint: "Kolom: Ref No." },
-  { value: "JASINDO", label: "JASINDO", key: "Reference", hint: "Kolom: Reference" },
-  { value: "JCR (Broker)", label: "JCR (Broker)", key: "DLA JCR", hint: "Kolom: DLA JCR" },
-  { value: "KABMN (Non-Proportional)", label: "KABMN (Non-Proportional)", key: "Insured Name", hint: "Kolom: Insured Name (sheet List of Large Losses)" },
-  { value: "KARK (Non-Proportional)", label: "KARK (Non-Proportional)", key: "Insured Name", hint: "Kolom: Insured Name (sheet 5.1)" },
-  { value: "KARK (Proportional)", label: "KARK (Proportional)", key: "Insured", hint: "Kolom: Insured (sheet List Realisasi)" },
-  { value: "KB INS", label: "KB INS", key: "Claim No.", hint: "Kolom: Claim No." },
-  { value: "KB INS (Non-Proportional)", label: "KB INS (Non-Proportional)", key: "Claim No", hint: "Kolom: Claim No (sheet 2.11)" },
-  { value: "KBRU (Broker)", label: "KBRU (Broker)", key: "REFF CLAIM", hint: "Kolom: REFF CLAIM" },
-  { value: "LINKS RE (Broker)", label: "LINKS RE (Broker)", key: "(LINKS-RE) CLAIM NUMBER", hint: "Kolom: (LINKS-RE) CLAIM NUMBER" },
-  { value: "LIPPO", label: "LIPPO", key: "No DLA / Claim", hint: "Kolom: No DLA / Claim" },
-  { value: "LIPPO (Non-Proportional)", label: "LIPPO (Non-Proportional)", key: "Insured Name", hint: "Kolom: Insured Name (Exhibit 5.1) / Event Name (Exhibit 5.2)" },
-  { value: "LIPPO (Proportional)", label: "LIPPO (Proportional)", key: "Claim No", hint: "Kolom: Claim No (Exhibit 5.1 / 5.2)" },
-  { value: "MAG", label: "MAG", key: "REFNO", hint: "Kolom: REFNO" },
-  { value: "MAIPARK (Non-Proportional)", label: "MAIPARK (Non-Proportional)", key: "Event", hint: "Kolom: Event (sheet Exhibit 4.1)" },
-  { value: "MARSH (Broker)", label: "MARSH (Broker)", key: "Trans No.", hint: "Kolom: Trans No." },
-  { value: "MAXIMUS (Non-Proportional)", label: "MAXIMUS (Non-Proportional)", key: "LOSS NO.", hint: "Kolom: LOSS NO. (sheet 2.10)" },
-  { value: "MAXIMUS (Proportional)", label: "MAXIMUS (Proportional)", key: "LOSS NO.", hint: "Kolom: LOSS NO. (sheet 2.10)" },
-  { value: "MAXIMUS (Surety Bond Proportional)", label: "MAXIMUS (Surety Bond Proportional)", key: "LOSS NO.", hint: "Kolom: LOSS NO. (sheet OS Loses)" },
-  { value: "MERITZ KORINDO (Proportional - MV & PA)", label: "MERITZ KORINDO (Proportional - MV & PA)", key: "Claim No.", hint: "Kolom: Claim No. (sheet List of Individual Losses 5 Yrs)" },
-  { value: "MKI (Non-Proportional)", label: "MKI (Non-Proportional)", key: "Claim No.", hint: "Kolom: Claim No. (sheet Larger Loss)" },
-  { value: "MNC", label: "MNC", key: "CLAIM NO", hint: "Kolom: CLAIM NO" },
-  { value: "MPM", label: "MPM", key: "Name Ref No.", hint: "Kolom: Name Ref No." },
-  { value: "MURE (BROKER)", label: "MURE (BROKER)", key: "No Claim MURE", hint: "Kolom: No Claim MURE" },
-  { value: "OONA", label: "OONA", key: "Slip No./DLA No.", hint: "Kolom: Slip No./DLA No." },
-  { value: "RAMAYANA", label: "RAMAYANA", key: "NO. DLA", hint: "Kolom: NO. DLA" },
-  { value: "SAMSUNG TUGU", label: "SAMSUNG TUGU", key: "INVOICE NO", hint: "Kolom: INVOICE NO" },
-  { value: "SINAR MAS", label: "SINAR MAS", key: "No. Invoice", hint: "Kolom: No. Invoice" },
-  { value: "SOMPO (CLAIM)", label: "SOMPO — CLAIM / AEGS", key: "Cross Reference", hint: "Kolom: Cross Reference (sheet CLAIM/AEGS)" },
-  { value: "SOMPO (CLAIM-OS)", label: "SOMPO — CLAIM (Outstanding)", key: "OUR DEBIT/CREDIT NO", hint: "Kolom: OUR DEBIT/CREDIT NO (sheet CLAIM outstanding)" },
-  { value: "SOMPO (FAC OUT)", label: "SOMPO — FAC OUT", key: "OUR DEBT/CREDIT NO.", hint: "Kolom: OUR DEBT/CREDIT NO. (sheet FAC OUT)" },
-  { value: "SOMPO (OS D/I)", label: "SOMPO — OS, D/I", key: "Ref No.", hint: "Kolom: Ref No. (sheet OS D/I)" },
-  { value: "TOKIO MARINE", label: "TOKIO MARINE", key: "CLAIM NO.", hint: "Kolom: CLAIM NO." },
-  { value: "TPI", label: "TPI", key: "Claim Number", hint: "Kolom: Claim Number" },
-  { value: "TRINITY RE (BROKER)", label: "TRINITY RE (BROKER)", key: "Trinity Claim Reff.", hint: "Kolom: Trinity Claim Reff." },
-  { value: "TRIPA", label: "TRIPA", key: "DocNo", hint: "Kolom: DocNo" },
-  { value: "UMUM MEGA", label: "UMUM MEGA", key: "REFNO", hint: "Kolom: REFNO" },
-  { value: "VIDEI", label: "VIDEI", key: "No DLA", hint: "Kolom: No DLA" },
-];
-
-/* ─── Cedant → primary key map  (InfoPack) ───────────── */
-/* InfoPack: primary key = DOL + COB (composite) untuk semua cedant */
-const CEDANT_MAP_INFOPACK = [
-  { value: "",               label: "— Pilih Cedant / Sumber —", key: "",        hint: "" },
-  { value: "ABB",            label: "ABB",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ADB (Non-Proportional)",       label: "ADB (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ADB Travel (Non-Proportional)", label: "ADB Travel (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ACA",            label: "ACA",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ADHI RE",        label: "ADHI RE",                    key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AGGI",           label: "AGGI",                       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AON (Broker)",   label: "AON (Broker)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "API RE (Broker)",label: "API RE (Broker)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASIB",           label: "ASIB",                       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASKRINDO",       label: "ASKRINDO",                   key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASTRARAHANA",    label: "ASTRARAHANA",                key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AVRIST",         label: "AVRIST",                     key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AXA",            label: "AXA",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BCA INSURANCE",  label: "BCA INSURANCE",              key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BINTANG",        label: "BINTANG",                    key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BRINS",          label: "BRINS",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CHINA TAIPING",  label: "CHINA TAIPING",              key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ETIGA",          label: "ETIGA",                      key: "DOL|COB", hint: "DOL · COB" },
-  { value: "FPG",            label: "FPG",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "GEGI",           label: "GEGI",                       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "HARTA AMAN",     label: "HARTA AMAN",                 key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASA RAHARJA",   label: "JASA RAHARJA",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASINDO",        label: "JASINDO",                    key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASTAN",            label: "JASTAN (Proportional)",      key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASTAN (Non-Proportional)", label: "JASTAN (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "KARK (Proportional)",      label: "KARK (Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "KARK (Non-Proportional)", label: "KARK (Non-Proportional)",   key: "DOL|COB", hint: "DOL · COB" },
-  { value: "KB INS (Proportional)",    label: "KB INS (Proportional)",     key: "DOL|COB", hint: "DOL · COB" },
-  { value: "KB INS (Non-Proportional)", label: "KB INS (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "LIPPO",          label: "LIPPO",                      key: "DOL|COB", hint: "DOL · COB" },
-  { value: "LIPPO (Proportional)", label: "LIPPO (Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "LIPPO (Non-Proportional)", label: "LIPPO (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAIPARK (Non-Proportional)", label: "MAIPARK (Non-Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAXIMUS (Proportional)",             label: "MAXIMUS (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAXIMUS (Non-Proportional)",         label: "MAXIMUS (Non-Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAXIMUS (Surety Bond Proportional)", label: "MAXIMUS (Surety Bond Proportional)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MERITZ KORINDO (Proportional - MV & PA)", label: "MERITZ KORINDO (Proportional - MV & PA)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MKI (Non-Proportional)",                 label: "MKI (Non-Proportional)",                 key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAG",            label: "MAG",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MNC",            label: "MNC",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MPM",            label: "MPM",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "OONA",           label: "OONA",                       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RAMAYANA",       label: "RAMAYANA",                   key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SAMSUNG TUGU",   label: "SAMSUNG TUGU",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SINAR MAS",      label: "SINAR MAS",                  key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SOMPO",          label: "SOMPO",                      key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TOKIO MARINE",   label: "TOKIO MARINE",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TPI",            label: "TPI",                        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "UMUM MEGA",      label: "UMUM MEGA",                  key: "DOL|COB", hint: "DOL · COB" },
-  { value: "VIDEI",          label: "VIDEI",                      key: "DOL|COB", hint: "DOL · COB" },
-  // ── Tambahan dari Rekap Infopack 2026 ──────────────────────────────
-  { value: "ABDA (Proportional)",              label: "ABDA (Proportional)",              key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ARTARINDO (Proportional)",         label: "ARTARINDO (Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASEI (Proportional)",              label: "ASEI (Proportional)",              key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASM (Proportional)",               label: "ASM (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASTRA (Proportional)",             label: "ASTRA (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASWATA (Proportional)",            label: "ASWATA (Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AUS (Proportional)",               label: "AUS (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AVRIST (Proportional)",            label: "AVRIST (Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BGU (Proportional)",               label: "BGU (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BINTANG (Proportional)",           label: "BINTANG (Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BOSOWA (Proportional)",            label: "BOSOWA (Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BRINS (Proportional)",             label: "BRINS (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BUANA IND (Proportional)",         label: "BUANA IND (Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BUMIDA (Proportional)",            label: "BUMIDA (Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CAKRAWALA (Proportional)",         label: "CAKRAWALA (Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CANDIUTA (Proportional)",          label: "CANDIUTA (Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CHINA TAIPING (Treaty)",           label: "CHINA TAIPING (Treaty)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "DAYIN (Proportional)",             label: "DAYIN (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ETIQA (Proportional)",             label: "ETIQA (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "EXIMBANK (Proportional)",          label: "EXIMBANK (Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "FPG (Proportional)",               label: "FPG (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "GEGII (Proportional)",             label: "GEGII (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "HARTA (Proportional)",             label: "HARTA (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "INTRA (Proportional)",             label: "INTRA (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASINDO (Proportional)",           label: "JASINDO (Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JRP (Proportional)",               label: "JRP (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MNC (Proportional)",               label: "MNC (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MSIG (Proportional)",              label: "MSIG (Proportional)",              key: "DOL|COB", hint: "DOL · COB" },
-  { value: "PLN (Proportional)",               label: "PLN (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RAKSA (Proportional)",             label: "RAKSA (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RAMAYANA (Proportional)",          label: "RAMAYANA (Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SAHABAT (Proportional)",           label: "SAHABAT (Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SAMSUNG TUGU (Proportional)",      label: "SAMSUNG TUGU (Proportional)",      key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SOMPO (Proportional)",             label: "SOMPO (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "STACO (Proportional)",             label: "STACO (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SUMIT OTO (Proportional)",         label: "SUMIT OTO (Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TOB (Proportional)",               label: "TOB (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TRIPA (Proportional)",             label: "TRIPA (Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "VICTORIA (Proportional)",          label: "VICTORIA (Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ZURICH (Proportional)",            label: "ZURICH (Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RELIANCE (Proportional)",          label: "RELIANCE (Proportional)",          key: "PLA",     hint: "Kolom: PLA (sheet GO / GP / GQ)" },
-  { value: "TOKIO MARINE (Proportional)",      label: "TOKIO MARINE (Proportional)",      key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TPI (Proportional)",               label: "TPI (Proportional)",               key: "DOL|COB", hint: "DOL · COB" },
-  // ── Non-Proportional ───────────────────────────────────────────────────
-  { value: "ABB (Non-Proportional)",             label: "ABB (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ABDA (Non-Proportional)",            label: "ABDA (Non-Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ACA (Non-Proportional)",             label: "ACA (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AGGI (Non-Proportional)",            label: "AGGI (Non-Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ARTARINDO (Non-Proportional)",       label: "ARTARINDO (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASEI (Non-Proportional)",            label: "ASEI (Non-Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASKRINDO (Non-Proportional)",        label: "ASKRINDO (Non-Proportional)",        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASM (Non-Proportional)",             label: "ASM (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASTRA (Non-Proportional)",           label: "ASTRA (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ASWATA (Non-Proportional)",          label: "ASWATA (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AUS (Non-Proportional)",             label: "AUS (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AVRIST (Non-Proportional)",          label: "AVRIST (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "AXA (Non-Proportional)",             label: "AXA (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BCA (Non-Proportional)",             label: "BCA (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BGU (Non-Proportional)",             label: "BGU (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BINTANG (Non-Proportional)",         label: "BINTANG (Non-Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BOSOWA (Non-Proportional)",          label: "BOSOWA (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BRINS (Non-Proportional)",           label: "BRINS (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BUANA IND (Non-Proportional)",       label: "BUANA IND (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "BUMIDA (Non-Proportional)",          label: "BUMIDA (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CAKRAWALA (Non-Proportional)",       label: "CAKRAWALA (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CHUBB (Non-Proportional)",           label: "CHUBB (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "CHINA TAIPING (Non-Proportional)",   label: "CHINA TAIPING (Non-Proportional)",   key: "DOL|COB", hint: "DOL · COB" },
-  { value: "DAYIN (Non-Proportional)",           label: "DAYIN (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ELJ (Non-Proportional)",             label: "ELJ (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ETIQA (Non-Proportional)",           label: "ETIQA (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "FPG (Non-Proportional)",             label: "FPG (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "GEGII (Non-Proportional)",           label: "GEGII (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "HARTA (Non-Proportional)",           label: "HARTA (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "INTRA (Non-Proportional)",           label: "INTRA (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASINDO (Non-Proportional)",         label: "JASINDO (Non-Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JASTAN (Non-Proportional InfoPack)", label: "JASTAN (Non-Proportional InfoPack)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "JRP (Non-Proportional)",             label: "JRP (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "KABMN (Non-Proportional)",           label: "KABMN (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "KB INS (Non-Proportional InfoPack)", label: "KB INS (Non-Proportional InfoPack)", key: "DOL|COB", hint: "DOL · COB" },
-  { value: "LIPPO (Non-Proportional InfoPack)",  label: "LIPPO (Non-Proportional InfoPack)",  key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAIPARK (Non-Proportional InfoPack)",label: "MAIPARK (Non-Proportional InfoPack)",key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MAXIMUS (Non-Proportional InfoPack)",label: "MAXIMUS (Non-Proportional InfoPack)",key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MERITZ KORINDO (Non-Proportional)",  label: "MERITZ KORINDO (Non-Proportional)",  key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MNC (Non-Proportional)",             label: "MNC (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MPM (Non-Proportional)",             label: "MPM (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "MSIG (Non-Proportional)",            label: "MSIG (Non-Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "PANFIC (Non-Proportional)",          label: "PANFIC (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "PLN (Non-Proportional)",             label: "PLN (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RAKSA (Non-Proportional)",           label: "RAKSA (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RAMA (Non-Proportional)",            label: "RAMA (Non-Proportional)",            key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RAMAYANA (Non-Proportional)",        label: "RAMAYANA (Non-Proportional)",        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "RELIANCE (Non-Proportional)",        label: "RELIANCE (Non-Proportional)",        key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SAHABAT (Non-Proportional)",         label: "SAHABAT (Non-Proportional)",         key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SAMSUNG TUGU (Non-Proportional)",    label: "SAMSUNG TUGU (Non-Proportional)",    key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SEAINSURE (Non-Proportional)",       label: "SEAINSURE (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SIMASTECH (Non-Proportional)",       label: "SIMASTECH (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SOMPO (Non-Proportional)",           label: "SOMPO (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "STACO (Non-Proportional)",           label: "STACO (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SUMIT OTO (Non-Proportional)",       label: "SUMIT OTO (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "SUNDAY (Non-Proportional)",          label: "SUNDAY (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TOB (Non-Proportional)",             label: "TOB (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TOKIO MARINE (Non-Proportional)",    label: "TOKIO MARINE (Non-Proportional)",    key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TPI (Non-Proportional)",             label: "TPI (Non-Proportional)",             key: "DOL|COB", hint: "DOL · COB" },
-  { value: "TRIPA (Non-Proportional)",           label: "TRIPA (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "UMUM MEGA (Non-Proportional)",       label: "UMUM MEGA (Non-Proportional)",       key: "DOL|COB", hint: "DOL · COB" },
-  { value: "VIDEI (Non-Proportional)",           label: "VIDEI (Non-Proportional)",           key: "DOL|COB", hint: "DOL · COB" },
-  { value: "ZURICH (Non-Proportional)",          label: "ZURICH (Non-Proportional)",          key: "DOL|COB", hint: "DOL · COB" },
-];
-
-/* ─── Upload steps guide ─────────────────────────────── */
-const STEPS = [
-  { n: "1", title: "Pilih Jenis Data",        desc: 'Pilih "OS Claim Cedant" atau "InfoPack" sesuai file yang akan diupload.' },
-  { n: "2", title: "Pilih Bulan Cut-Off",     desc: "Klik field Bulan Cut-Off, pilih bulan dan tahun periode data." },
-  { n: "3", title: "Pilih Cedant / Sumber",   desc: "Pilih nama cedant dari dropdown. Kolom identifier akan otomatis terisi sesuai mapping." },
-  { n: "4", title: "Pilih Sheet (opsional)",  desc: "Jika file punya banyak sheet, pilih sheet yang berisi data OS Claim." },
-  { n: "5", title: "Upload File",             desc: 'Klik "+ Select Excel" atau drag & drop file .xlsx/.xls ke area drop zone.' },
-  { n: "6", title: "Klik Upload ke Master",   desc: "Klik tombol hijau. Data akan otomatis di-append ke Master tanpa menghapus data sebelumnya." },
-];
-
-/* ─── helpers ────────────────────────────────────────── */
-function Label({ htmlFor, text, required }) {
+/* ─── helpers ────────────────────────────────────────────── */
+function Label({ htmlFor, text, required, optional }) {
   return (
     <label htmlFor={htmlFor} className="block text-xs font-semibold text-gray-600 mb-1">
-      {text}{required && <span className="text-red-500 ml-0.5">*</span>}
+      {text}
+      {required && <span className="text-red-500 ml-0.5">*</span>}
+      {optional && <span className="text-gray-400 font-normal ml-1">(opsional)</span>}
     </label>
   );
 }
@@ -282,10 +51,11 @@ function CutOffPicker({ bulan, tahun, onBulan, onTahun, disabled }) {
         className={[
           "flex items-center border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white cursor-pointer select-none",
           disabled ? "opacity-50 pointer-events-none" : "hover:border-teal-400",
+          !bulan ? "border-amber-300 ring-1 ring-amber-200" : "",
         ].join(" ")}
       >
         <span className={`flex-1 ${displayVal ? "text-gray-700" : "text-gray-400"}`}>
-          {displayVal || "Pilih bulan…"}
+          {displayVal || "Pilih bulan dulu…"}
         </span>
         <CalendarIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
       </div>
@@ -313,15 +83,11 @@ function CutOffPicker({ bulan, tahun, onBulan, onTahun, disabled }) {
 }
 
 function DropZone({ file, onFile, disabled }) {
-  const fileRef   = useRef(null);
-  const folderRef = useRef(null);
+  const fileRef = useRef(null);
   const [drag, setDrag] = useState(false);
 
-  // Accept semua file Excel — filter di sini, bukan di attribute accept
-  // agar dialog tidak menyembunyikan file valid di beberapa browser/OS
   const EXCEL_EXTS = [".xlsx", ".xls", ".xlsm", ".xlsb"];
   const isExcel = (name) => EXCEL_EXTS.some(ext => name.toLowerCase().endsWith(ext));
-
   const pick = (files) => {
     const f = Array.from(files).find(f => isExcel(f.name));
     if (f) onFile(f);
@@ -334,16 +100,16 @@ function DropZone({ file, onFile, disabled }) {
         onDragOver={e => { e.preventDefault(); if (!disabled) setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         className={[
-          "rounded-xl border-2 border-dashed px-4 py-7 transition-all flex flex-col items-center justify-center gap-2 min-h-[120px]",
+          "rounded-xl border-2 border-dashed px-4 py-8 transition-all flex flex-col items-center justify-center gap-2 min-h-[140px]",
           drag ? "border-teal-500 bg-teal-50" : "border-teal-200 bg-white",
           disabled ? "opacity-50" : "",
         ].join(" ")}
       >
         {!file ? (
           <>
-            <CloudArrowUpIcon className="h-9 w-9 text-teal-500" />
+            <CloudArrowUpIcon className="h-10 w-10 text-teal-500" />
             <p className="text-sm font-bold text-gray-700">Drop Excel files here</p>
-            <p className="text-xs text-teal-600">Format .xlsx / .xls · Maks. 15 MB per file</p>
+            <p className="text-xs text-gray-400">Format .xlsx / .xls · Maks. 8 MB per file</p>
           </>
         ) : (
           <div className="w-full flex items-center gap-2 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2">
@@ -357,28 +123,19 @@ function DropZone({ file, onFile, disabled }) {
           </div>
         )}
       </div>
-      {/* accept="*" — tampilkan SEMUA file di dialog, filter ekstensi di pick() */}
-      <input ref={fileRef}   type="file" accept="*" className="hidden"
+      <input ref={fileRef} type="file" accept="*" className="hidden"
         onChange={e => { pick(e.target.files); e.target.value = ""; }} disabled={disabled} />
-      <input ref={folderRef} type="file" accept="*" multiple webkitdirectory="" className="hidden"
-        onChange={e => { pick(e.target.files); e.target.value = ""; }} disabled={disabled} />
-      <div className="flex gap-2">
-        <button type="button" onClick={() => fileRef.current?.click()} disabled={disabled}
-          className="flex-1 flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors">
-          <ArrowUpTrayIcon className="h-3.5 w-3.5" /> + Select Excel
-        </button>
-        <button type="button" onClick={() => folderRef.current?.click()} disabled={disabled}
-          className="flex-1 flex items-center justify-center gap-1.5 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-600 text-xs font-semibold px-3 py-2 rounded-lg border border-gray-200 transition-colors">
-          <FolderOpenIcon className="h-3.5 w-3.5" /> ⊞ Select Folder
-        </button>
-      </div>
+      <button type="button" onClick={() => fileRef.current?.click()} disabled={disabled}
+        className="w-full flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition-colors">
+        <ArrowUpTrayIcon className="h-4 w-4" /> + Select Excel
+      </button>
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════
    MAIN PAGE
-═══════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════ */
 export default function ComparePage({ onNavigate }) {
   const {
     form, updateForm,
@@ -389,55 +146,78 @@ export default function ComparePage({ onNavigate }) {
     submit, reset,
   } = useMasterUpload();
 
-  const [activeTab,   setActiveTab]   = useState("os");
-  const [driveUrl,    setDriveUrl]    = useState("");
-  const [driveBulan,  setDriveBulan]  = useState("");
-  const [driveTahun,  setDriveTahun]  = useState(String(new Date().getFullYear()));
-  const [driveCedant, setDriveCedant] = useState("");
-  const [showGuide,   setShowGuide]   = useState(true);
+  const [activeTab,          setActiveTab]          = useState("os");
+  const [selectedProfileIdx, setSelectedProfileIdx] = useState(0);
 
-  const jenisTipe       = activeTab === "os" ? "OS Cedant" : "Infopack";
-  const isInfopack      = activeTab === "infopack";
-  const activeCedantMap = isInfopack ? CEDANT_MAP_INFOPACK : CEDANT_MAP;
-  const selectedEntry   = activeCedantMap.find(c => c.value === form.cedant);
+  const jenisTipe  = activeTab === "os" ? "OS Cedant" : "Infopack";
+  const isInfopack = activeTab === "infopack";
 
-  // For InfoPack composite key: split "DOL|COB" into editable parts
-  const isComposite = isInfopack && selectedEntry?.key?.includes("|");
-  const [dolPart, cobPart] = isComposite
-    ? selectedEntry.key.split("|").map(s => s.trim())
-    : ["", ""];
+  // Daftar cedant unik dari PROFILES (sorted A-Z)
+  const allProfiles   = isInfopack ? PROFILES_INFOPACK : PROFILES_OS;
+  const uniqueCedants = [...new Set(allProfiles.map(p => p.cedant))].sort((a, b) =>
+    a.localeCompare(b, "id")
+  );
 
+  // Profil milik cedant yang dipilih
+  const activeProfiles = allProfiles.filter(p => p.cedant === form.cedant);
+  const currentProfile = activeProfiles[selectedProfileIdx] ?? activeProfiles[0] ?? null;
+
+  // Composite key detection
+  const isComposite = currentProfile?.lossRef?.includes("|") ?? false;
+
+  /* ── Auto-submit saat file tersedia dan bulan sudah dipilih ── */
+  useEffect(() => {
+    if (!file || !form.bulan || loading) return;
+    // Pastikan tipe_data terisi
+    if (!form.tipe_data) updateForm("tipe_data", jenisTipe);
+    submit();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file]);
+
+  /* ── handlers ── */
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     updateForm("tipe_data", tab === "os" ? "OS Cedant" : "Infopack");
     updateForm("cedant", "");
     updateForm("primary_key_col", "");
+    updateForm("sheet_name", "");
+    setSelectedProfileIdx(0);
   };
 
   const handleCedantChange = (val) => {
-    const entry = activeCedantMap.find(c => c.value === val);
     updateForm("cedant", val);
-    updateForm("primary_key_col", entry?.key ?? "");
+    setSelectedProfileIdx(0);
+    updateForm("sheet_name", "");
+    if (!val) {
+      updateForm("primary_key_col", "");
+      return;
+    }
+    const profiles = allProfiles.filter(p => p.cedant === val);
+    const pk = (profiles[0]?.lossRef && profiles[0].lossRef !== "—")
+      ? profiles[0].lossRef : "";
+    updateForm("primary_key_col", pk);
   };
 
-  // Called when user edits the DOL or COB part individually
+  const handleProfileChange = (idx) => {
+    const i = Number(idx);
+    setSelectedProfileIdx(i);
+    const pk = activeProfiles[i]?.lossRef ?? "";
+    if (pk && pk !== "—") updateForm("primary_key_col", pk);
+  };
+
   const handleCompositePartChange = (part, value) => {
-    const current = form.primary_key_col || selectedEntry?.key || "|";
+    const current = form.primary_key_col || currentProfile?.lossRef || "|";
     const parts   = current.split("|");
-    if (part === "dol") parts[0] = value;
-    else                parts[1] = value;
+    if (part === "left")  parts[0] = value;
+    else                  parts[1] = value;
     updateForm("primary_key_col", parts.join("|"));
   };
 
-  const handleSubmit = () => {
-    if (!form.tipe_data) updateForm("tipe_data", jenisTipe);
-    submit();
-  };
-
+  /* ── render ── */
   return (
     <div className="flex-1 flex flex-col bg-gray-50 overflow-auto">
 
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="page-header">
         <div className="h-8 w-8 rounded-xl bg-teal-600 flex items-center justify-center flex-shrink-0">
           <ArrowUpTrayIcon className="h-4 w-4 text-white" />
@@ -446,13 +226,13 @@ export default function ComparePage({ onNavigate }) {
           <p className="text-[10px] font-bold uppercase tracking-widest text-teal-600">DATA INGESTION</p>
           <h1 className="text-base font-bold text-gray-800 leading-tight">Upload Data</h1>
         </div>
-        <button onClick={() => { reset(); setShowGuide(true); }} disabled={loading}
+        <button onClick={() => { reset(); setSelectedProfileIdx(0); }} disabled={loading}
           className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40">
           <ArrowPathIcon className="h-3.5 w-3.5" /> ↺ Refresh
         </button>
       </div>
 
-      <div className="px-6 py-6 flex flex-col gap-5 max-w-6xl w-full">
+      <div className="px-6 py-6 max-w-2xl w-full flex flex-col gap-5">
 
         {/* ── Tabs ── */}
         <div className="flex gap-0 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
@@ -463,339 +243,243 @@ export default function ComparePage({ onNavigate }) {
                 activeTab === key
                   ? "bg-white shadow text-teal-700 font-semibold border border-gray-200"
                   : "text-gray-500 hover:text-gray-700",
-              ].join(" ")}
-            >{label}</button>
+              ].join(" ")}>
+              {label}
+            </button>
           ))}
         </div>
 
-        {/* ── Step-by-step guide ── */}
-        {showGuide && (
-          <div className="bg-white rounded-2xl border border-teal-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3.5 bg-teal-50 border-b border-teal-100">
-              <div className="flex items-center gap-2">
-                <LightBulbIcon className="h-4 w-4 text-teal-600 flex-shrink-0" />
-                <span className="text-sm font-bold text-teal-800">Cara Upload Data — 6 Langkah</span>
-              </div>
-              <button onClick={() => setShowGuide(false)}
-                className="text-xs text-teal-500 hover:text-teal-700 font-medium transition-colors">
-                Sembunyikan ✕
-              </button>
-            </div>
-            <div className="px-5 py-4 grid grid-cols-2 md:grid-cols-3 gap-3">
-              {STEPS.map(s => (
-                <div key={s.n} className="flex items-start gap-3">
-                  <span className="flex-shrink-0 h-6 w-6 rounded-full bg-teal-600 text-white text-xs font-bold flex items-center justify-center mt-0.5">
-                    {s.n}
-                  </span>
-                  <div>
-                    <p className="text-xs font-semibold text-gray-800">{s.title}</p>
-                    <p className="text-xs text-gray-500 leading-relaxed mt-0.5">{s.desc}</p>
-                  </div>
-                </div>
-              ))}
+        {/* ── Section title ── */}
+        <div>
+          <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">DATA INGESTION</p>
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-extrabold text-gray-800">Upload Data</h2>
+              <p className="text-xs text-gray-400 mt-1">
+                Pilih jenis data dan bulan cut-off sebelum upload. Setiap file dicatat otomatis dengan waktu upload dan riwayat aktivitas.
+              </p>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* ── Section subtitle ── */}
-        <p className="text-xs text-gray-400 -mt-2">
-          Pilih jenis data dan bulan cut-off sebelum upload. Setiap file dicatat otomatis dengan waktu upload dan riwayat aktivitas.
-        </p>
+        {/* Upload panel */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col gap-5">
+          <div>
+            <h3 className="text-base font-bold text-gray-800">Upload from Computer</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Pilih file Excel — upload otomatis dimulai setelah file dipilih.</p>
+          </div>
 
-        {/* ── Two-panel ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {/* Bulan Cut-Off */}
+          <CutOffPicker
+            bulan={form.bulan} tahun={form.tahun}
+            onBulan={v => updateForm("bulan", v)}
+            onTahun={v => updateForm("tahun", v)}
+            disabled={loading}
+          />
 
-          {/* ══ LEFT: Upload from Computer ══ */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col gap-4">
-            <div>
-              <h3 className="text-sm font-bold text-gray-800">Upload from Computer</h3>
-              <p className="text-xs text-teal-600 mt-0.5">Pilih banyak file atau unggah satu folder yang berisi Excel.</p>
+          {/* Peringatan jika bulan belum dipilih */}
+          {!form.bulan && (
+            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-2 rounded-lg text-xs">
+              <InformationCircleIcon className="h-4 w-4 flex-shrink-0" />
+              Pilih <strong>Bulan Cut-Off</strong> terlebih dahulu sebelum memilih file.
+            </div>
+          )}
+
+          {/* Row 2: Cedant / Sumber (opsional) */}
+          <div>
+            <Label htmlFor="cedant_local" text="Cedant / Sumber" optional />
+            <div className="relative">
+              <select id="cedant_local" value={form.cedant}
+                onChange={e => handleCedantChange(e.target.value)}
+                disabled={loading} className={SEL + " pr-8"}>
+                <option value="">Auto-detect dari mapping</option>
+                {uniqueCedants.map(val => (
+                  <option key={val} value={val}>{val}</option>
+                ))}
+              </select>
+              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
             </div>
 
-            {/* Step 1+2: Jenis Data + Bulan Cut-Off */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="jenis_local" text="Jenis Data" required />
+            {!form.cedant && (
+              <p className="text-xs text-gray-400 mt-1.5">
+                OS Claim dipindai berdasarkan mapping warna dan dapat di-append ke Master.
+              </p>
+            )}
+
+            {/* Multi-profil: dropdown sheet/variant */}
+            {form.cedant && activeProfiles.length > 1 && (
+              <div className="mt-2">
+                <label className="block text-xs font-semibold text-gray-600 mb-1">
+                  Sheet / Variant
+                  <span className="text-gray-400 font-normal ml-1">({activeProfiles.length} profil tersedia)</span>
+                </label>
                 <div className="relative">
-                  <select id="jenis_local"
-                    value={form.tipe_data || jenisTipe}
-                    onChange={e => updateForm("tipe_data", e.target.value)}
-                    disabled={loading} className={SEL + " pr-8"}>
-                    <option value="OS Cedant">OS Claim Cedant</option>
-                    <option value="Infopack">Infopack</option>
+                  <select
+                    value={selectedProfileIdx}
+                    onChange={e => handleProfileChange(e.target.value)}
+                    disabled={loading}
+                    className={SEL + " pr-8"}>
+                    {activeProfiles.map((p, i) => (
+                      <option key={i} value={i}>
+                        {p.sheetMet} — {p.lossRef !== "—" ? p.lossRef : "—"}
+                      </option>
+                    ))}
                   </select>
                   <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
                 </div>
+                {currentProfile && (
+                  <p className="text-xs text-teal-600 mt-1">
+                    Primary key: <strong className="font-mono">{currentProfile.lossRef}</strong>
+                    {currentProfile.outstanding && currentProfile.outstanding !== "—" &&
+                      <> · OS: {currentProfile.outstanding}</>}
+                  </p>
+                )}
               </div>
-              <CutOffPicker
-                bulan={form.bulan} tahun={form.tahun}
-                onBulan={v => updateForm("bulan", v)}
-                onTahun={v => updateForm("tahun", v)}
-                disabled={loading}
-              />
-            </div>
+            )}
 
-            {/* Step 3: Cedant */}
-            <div>
-              <Label htmlFor="cedant_local" text="Cedant / Sumber" required />
-              <div className="relative">
-                <select id="cedant_local" value={form.cedant}
-                  onChange={e => handleCedantChange(e.target.value)}
-                  disabled={loading} className={SEL + " pr-8"}>
-                  {activeCedantMap.map(c => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
-                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
-              </div>
-
-              {/* Auto-filled PK hint */}
-              {selectedEntry?.key ? (
-                isComposite ? (
-                  <div className="mt-1.5 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 flex flex-col gap-1">
-                    <div className="flex items-center gap-1.5">
-                      <InformationCircleIcon className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
-                      <span className="text-xs font-semibold text-blue-700">
-                        InfoPack: Primary Key = DOL + COB (composite)
-                      </span>
-                    </div>
-                    <p className="text-xs text-blue-600 leading-relaxed">
-                      Nilai <strong>tanggal kejadian</strong> dan <strong>kelas bisnis</strong> digabung otomatis
-                      sebagai identifier unik. Sesuaikan nama kolom di bawah jika berbeda dari file kamu.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 mt-1.5 bg-teal-50 border border-teal-100 rounded-lg px-3 py-1.5">
-                    <InformationCircleIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
-                    <span className="text-xs text-teal-700">
-                      Identifier otomatis: <strong className="font-mono">{selectedEntry.key}</strong>
-                    </span>
-                  </div>
-                )
-              ) : (
-                <p className="text-xs text-gray-400 mt-1">Pilih cedant agar kolom identifier terisi otomatis.</p>
-              )}
-            </div>
-
-            {/* PK override — composite (InfoPack) vs single (OS) */}
-            {form.cedant && isComposite ? (
-              <div className="flex flex-col gap-2">
-                <p className="text-xs font-semibold text-gray-600">
-                  Kolom DOL &amp; COB <span className="text-gray-400 font-normal">(sesuaikan jika nama kolom di file berbeda)</span>
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom DOL</label>
-                    <input type="text"
-                      value={(form.primary_key_col || selectedEntry?.key || "").split("|")[0] ?? dolPart}
-                      onChange={e => handleCompositePartChange("dol", e.target.value)}
-                      disabled={loading}
-                      placeholder={dolPart || "Date Of Loss"}
-                      className={SEL + " font-mono text-xs"}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom COB</label>
-                    <input type="text"
-                      value={(form.primary_key_col || selectedEntry?.key || "").split("|")[1] ?? cobPart}
-                      onChange={e => handleCompositePartChange("cob", e.target.value)}
-                      disabled={loading}
-                      placeholder={cobPart || "COB"}
-                      className={SEL + " font-mono text-xs"}
-                    />
-                  </div>
+            {/* Single profil: tampilkan info auto-fill */}
+            {form.cedant && activeProfiles.length === 1 && currentProfile && (
+              <div className="mt-1.5 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <InformationCircleIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
+                  <span className="text-xs text-teal-700">
+                    Sheet: <strong>{currentProfile.sheetMet}</strong>
+                    {" "}· Key: <strong className="font-mono">{currentProfile.lossRef}</strong>
+                  </span>
                 </div>
-                <p className="text-[10px] text-gray-400">
-                  Key yang dikirim: <code className="font-mono bg-gray-100 px-1 rounded">
-                    {form.primary_key_col || selectedEntry?.key || "—"}
-                  </code>
-                </p>
+                {currentProfile.outstanding && currentProfile.outstanding !== "—" && (
+                  <p className="text-xs text-teal-600 ml-5">
+                    Outstanding: {currentProfile.outstanding} · DOL: {currentProfile.dateOfLoss}
+                  </p>
+                )}
               </div>
-            ) : form.cedant ? (
-              <div>
-                <Label htmlFor="pk_col" text="Koreksi Kolom Identifier (jika perlu)" />
+            )}
+
+            {/* Composite key editor */}
+            {form.cedant && isComposite && (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom 1</label>
+                  <input type="text"
+                    value={(form.primary_key_col || currentProfile?.lossRef || "").split("|")[0] ?? ""}
+                    onChange={e => handleCompositePartChange("left", e.target.value)}
+                    disabled={loading}
+                    className={SEL + " font-mono text-xs"}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom 2</label>
+                  <input type="text"
+                    value={(form.primary_key_col || currentProfile?.lossRef || "").split("|")[1] ?? ""}
+                    onChange={e => handleCompositePartChange("right", e.target.value)}
+                    disabled={loading}
+                    className={SEL + " font-mono text-xs"}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Override PK manual (single, non-composite) */}
+            {form.cedant && !isComposite && activeProfiles.length > 0 && (
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">
+                  Koreksi kolom identifier <span className="text-gray-400">(jika nama kolom di file berbeda)</span>
+                </label>
                 <input id="pk_col" type="text"
                   value={form.primary_key_col}
                   onChange={e => updateForm("primary_key_col", e.target.value)}
                   disabled={loading}
-                  placeholder={selectedEntry?.key || "Nama kolom…"}
+                  placeholder={currentProfile?.lossRef || "Nama kolom…"}
                   className={SEL + " font-mono text-xs"}
                 />
-                <p className="text-xs text-gray-400 mt-1">
-                  Edit hanya jika kolom di file berbeda dari mapping di atas. Biasanya tidak perlu diubah.
-                </p>
-              </div>
-            ) : null}
-
-            {/* Step 4: Sheet selector */}
-            {sheets.length > 0 && (
-              <div>
-                <Label htmlFor="sheet_name" text="Sheet (opsional)" />
-                <div className="relative">
-                  <select id="sheet_name" value={form.sheet_name}
-                    onChange={e => updateForm("sheet_name", e.target.value)}
-                    disabled={loading} className={SEL + " pr-8"}>
-                    <option value="">— Sheet pertama (default) —</option>
-                    {sheets.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
-                </div>
               </div>
             )}
-
-            {/* Step 5: Drop zone */}
-            <DropZone file={file} onFile={handleFileChange} disabled={loading} />
-
-            {/* Progress */}
-            {loading && uploadPct > 0 && uploadPct < 100 && (
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-xs text-gray-500">
-                  <span>Mengunggah…</span>
-                  <span className="font-semibold text-teal-700">{uploadPct}%</span>
-                </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-teal-500 rounded-full transition-all duration-300"
-                    style={{ width: `${uploadPct}%` }}
-                    role="progressbar" aria-valuenow={uploadPct} aria-valuemin={0} aria-valuemax={100} />
-                </div>
-              </div>
-            )}
-            {loading && uploadPct >= 100 && (
-              <div className="flex items-center gap-2 text-xs text-teal-700 animate-pulse">
-                <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> Memproses data…
-              </div>
-            )}
-
-            {/* Error */}
-            {error && (
-              <div role="alert" className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 px-3 py-2.5 rounded-xl text-xs">
-                <ExclamationCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold mb-0.5">Upload gagal</p>
-                  <p>{error}</p>
-                  {error.includes("tidak ditemukan") && (
-                    <p className="mt-1 text-red-500">
-                      💡 Coba koreksi nama kolom pada field "Koreksi Kolom Identifier" di atas, sesuaikan dengan nama kolom yang muncul di pesan error.
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Success */}
-            {result && (
-              <div className="flex items-start gap-2 bg-teal-50 border border-teal-200 text-teal-800 px-4 py-3 rounded-xl text-xs">
-                <CheckCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-teal-600" />
-                <div>
-                  <p className="font-bold text-sm text-teal-800">Upload berhasil! ✓</p>
-                  <p className="mt-1 text-teal-700 leading-relaxed">
-                    <strong>{result.rows_appended?.toLocaleString("id-ID")}</strong> baris ditambahkan ke Master ·{" "}
-                    <strong>{result.rows_skipped?.toLocaleString("id-ID")}</strong> dilewati (sudah ada) ·{" "}
-                    Total <strong>{result.total_rows?.toLocaleString("id-ID")}</strong> baris diproses
-                  </p>
-                  <p className="mt-1 text-teal-600">
-                    Sheet: <code className="bg-teal-100 px-1.5 py-0.5 rounded font-mono">{result.sheet}</code>
-                    {" "}· Lihat hasil di halaman{" "}
-                    <button onClick={() => onNavigate?.("master")} className="font-bold underline">Master</button>
-                    {" "}atau{" "}
-                    <button onClick={() => onNavigate?.("library_os")} className="font-bold underline">Library</button>.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Step 6: Submit */}
-            <button type="button" onClick={handleSubmit} disabled={loading}
-              className="w-full flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition-colors">
-              <ArrowUpTrayIcon className="h-4 w-4" />
-              {loading ? "Memproses…" : "⊕ Upload ke Master"}
-            </button>
           </div>
 
-          {/* ══ RIGHT: Import from Google Drive ══ */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col gap-4">
+          {/* Sheet selector (dari file yang diupload) */}
+          {sheets.length > 1 && (
             <div>
-              <h3 className="text-sm font-bold text-gray-800">Import from Google Drive</h3>
-              <p className="text-xs text-teal-600 mt-0.5">Gunakan apabila seluruh Excel sudah berada dalam satu folder Drive.</p>
-            </div>
-
-            {/* Drive URL */}
-            <div>
-              <Label htmlFor="drive_url" text="Google Drive Folder URL / ID" />
-              <input id="drive_url" type="url" value={driveUrl} onChange={e => setDriveUrl(e.target.value)}
-                placeholder="https://drive.google.com/drive/folders/..."
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 placeholder-gray-300" />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label text="Jenis Data" required />
-                <div className="relative">
-                  <select value={jenisTipe} disabled className={SEL + " pr-8 bg-gray-50 cursor-default"}>
-                    <option>OS Claim Cedant</option>
-                    <option>Infopack</option>
-                  </select>
-                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
-                </div>
-              </div>
-              <CutOffPicker bulan={driveBulan} tahun={driveTahun}
-                onBulan={setDriveBulan} onTahun={setDriveTahun} disabled={false} />
-            </div>
-
-            <div>
-              <Label text="Cedant / Sumber" />
+              <Label htmlFor="sheet_name" text="Sheet" optional />
               <div className="relative">
-                <select value={driveCedant} onChange={e => setDriveCedant(e.target.value)} className={SEL + " pr-8"}>
-                  {activeCedantMap.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                <select id="sheet_name" value={form.sheet_name}
+                  onChange={e => updateForm("sheet_name", e.target.value)}
+                  disabled={loading} className={SEL + " pr-8"}>
+                  <option value="">— Sheet pertama (default) —</option>
+                  {sheets.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
               </div>
+              {form.cedant && currentProfile && sheets.includes(currentProfile.sheetMet) && form.sheet_name !== currentProfile.sheetMet && (
+                <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                  <InformationCircleIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                  Mapping menyarankan sheet <strong className="font-mono">{currentProfile.sheetMet}</strong>
+                </p>
+              )}
             </div>
+          )}
 
-            <button type="button" disabled
-              className="flex items-center justify-center gap-2 bg-teal-600 disabled:bg-teal-400 text-white text-sm font-semibold px-4 py-2.5 rounded-xl cursor-not-allowed"
-              title="Membutuhkan integrasi Google Drive API">
-              <ArrowUpTrayIcon className="h-4 w-4" /> ⊕ Import Folder Excel
-            </button>
+          {/* Drop zone */}
+          <DropZone file={file} onFile={handleFileChange} disabled={loading || !form.bulan} />
 
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700 leading-relaxed">
-              Hanya file Excel pada level teratas folder yang diimpor. File asli Drive tidak dimodifikasi; aplikasi membuat salinan kerja.
+          {/* Progress */}
+          {loading && uploadPct > 0 && uploadPct < 100 && (
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>Mengunggah…</span>
+                <span className="font-semibold text-teal-700">{uploadPct}%</span>
+              </div>
+              <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full bg-teal-500 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadPct}%` }}
+                  role="progressbar" aria-valuenow={uploadPct} aria-valuemin={0} aria-valuemax={100} />
+              </div>
             </div>
-
-            {/* Tips */}
-            <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex flex-col gap-2">
-              <p className="text-xs font-bold text-gray-700">💡 Tips upload</p>
-              <ul className="text-xs text-gray-500 space-y-1 list-none">
-                <li>• Pastikan file Excel tidak di-protect dengan password</li>
-                <li>• Data harus ada di baris pertama sebagai header kolom</li>
-                <li>• Jika ada error "kolom tidak ditemukan", cek nama kolom identifier di Mapping Rules</li>
-                <li>• Upload berikutnya <strong>otomatis append</strong> — data lama tidak terhapus</li>
-                <li>• Duplicate (sama persis) otomatis dilewati tanpa error</li>
-              </ul>
+          )}
+          {loading && uploadPct >= 100 && (
+            <div className="flex items-center gap-2 text-xs text-teal-700 animate-pulse">
+              <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> Memproses data…
             </div>
-          </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div role="alert" className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 px-3 py-2.5 rounded-xl text-xs">
+              <ExclamationCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold mb-0.5">Upload gagal</p>
+                <p>{error}</p>
+                {error.includes("tidak ditemukan") && (
+                  <p className="mt-1 text-red-500">
+                    Coba koreksi nama kolom pada field "Koreksi kolom identifier" di atas.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Success */}
+          {result && (
+            <div className="flex items-start gap-2 bg-teal-50 border border-teal-200 text-teal-800 px-4 py-3 rounded-xl text-xs">
+              <CheckCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-teal-600" />
+              <div>
+                <p className="font-bold text-sm text-teal-800">Upload berhasil!</p>
+                <p className="mt-1 text-teal-700 leading-relaxed">
+                  <strong>{result.rows_appended?.toLocaleString("id-ID")}</strong> baris ditambahkan ke Master ·{" "}
+                  <strong>{result.rows_skipped?.toLocaleString("id-ID")}</strong> dilewati ·{" "}
+                  Total <strong>{result.total_rows?.toLocaleString("id-ID")}</strong> baris diproses
+                </p>
+                <p className="mt-1 text-teal-600">
+                  Sheet: <code className="bg-teal-100 px-1.5 py-0.5 rounded font-mono">{result.sheet}</code>
+                  {" "}· Lihat di{" "}
+                  <button onClick={() => onNavigate?.("master")} className="font-bold underline">Master</button>
+                  {" "}atau{" "}
+                  <button onClick={() => onNavigate?.("library_os")} className="font-bold underline">Library</button>.
+                </p>
+              </div>
+            </div>
+          )}
+
         </div>
-
-        {/* Bottom bar */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-3.5 flex items-center justify-between gap-4 text-xs text-gray-500">
-          <span>
-            Setelah upload, kelola file melalui{" "}
-            <button onClick={() => onNavigate?.("library")}
-              className="text-teal-600 font-semibold hover:underline">Library</button>{" "}
-            atau lanjutkan deteksi sesuai jenis data.
-          </span>
-          <div className="flex gap-2 flex-shrink-0">
-            <button onClick={() => onNavigate?.("library_os")}
-              className="border border-gray-200 bg-white hover:bg-teal-50 hover:border-teal-300 hover:text-teal-700 text-gray-600 px-3 py-1.5 rounded-lg transition-colors">
-              Library OS Claim →
-            </button>
-            <button onClick={() => onNavigate?.("library_infopack")}
-              className="border border-gray-200 bg-white hover:bg-teal-50 hover:border-teal-300 hover:text-teal-700 text-gray-600 px-3 py-1.5 rounded-lg transition-colors">
-              Library InfoPack →
-            </button>
-          </div>
-        </div>
-
       </div>
     </div>
   );

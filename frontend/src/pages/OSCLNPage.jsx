@@ -117,24 +117,26 @@ export default function OSCLNPage() {
     } catch (_) {}
   }, []);
 
-  const loadResults = useCallback(async () => {
-    if (!selected) return;
+  const loadResults = useCallback(async (jobId, diffType, pageNum) => {
+    if (!jobId) return;
     setLoadingData(true);
     setError(null);
     try {
-      const res = await getResults(selected.id, {
-        diffType: tab || undefined,
-        skip:     page * PAGE_SIZE,
+      const res = await getResults(jobId, {
+        diffType: diffType || undefined,
+        skip:     pageNum * PAGE_SIZE,
         limit:    PAGE_SIZE,
       });
       setResults(res);
     } catch (e) { setError(e.message); }
     finally { setLoadingData(false); }
-  }, [selected, tab, page]);
+  }, []);
 
   useEffect(() => { loadJobs(); loadSnapshots(); }, [loadJobs, loadSnapshots]);
-  useEffect(() => { loadResults(); },               [loadResults]);
-  useEffect(() => { setPage(0); },                  [tab, selected]);
+  useEffect(() => {
+    if (selected?.id) loadResults(selected.id, tab, page);
+  }, [selected?.id, tab, page, loadResults]);
+  useEffect(() => { setPage(0); }, [tab, selected?.id]);
 
   /* ── sync recPk when snapshot changes ── */
   useEffect(() => {
@@ -174,19 +176,40 @@ export default function OSCLNPage() {
     if (!recPk.trim()) return setRecError("Kolom Primary Key wajib diisi.");
     setReconciling(true);
     setRecError(null);
+    setResults(null);
+    setPage(0);
+    setTab("");
     try {
       const res = await runReconciliation({
         snapshotId:    activeSnap.id,
         tipeData:      recTipeData,
         primaryKeyCol: recPk.trim(),
       });
+      // Muat ulang job list dan langsung select job baru berdasarkan job_id
       const jobRes = await listJobs(0, 100);
       const done   = (jobRes.jobs || []).filter(j => j.status === "done");
       setJobs(done);
-      const newJob = done.find(j => j.id === res.job_id) || done[0] || null;
-      setSelected(newJob);
-      setTab("");
-      setPage(0);
+      const newJob = done.find(j => j.id === res.job_id);
+      if (newJob) {
+        setSelected({ ...newJob }); // spread agar React deteksi perubahan referensi
+      } else {
+        // fallback: buat object dari response reconcile langsung
+        setSelected({
+          id:             res.job_id,
+          total_rows_a:   res.total_rows_a,
+          total_rows_b:   res.total_rows_b,
+          total_matched:  res.summary?.matched   ?? 0,
+          total_changed:  res.summary?.changed   ?? 0,
+          total_only_in_a:res.summary?.only_in_a ?? 0,
+          total_only_in_b:res.summary?.only_in_b ?? 0,
+          bulan:          activeSnap.bulan,
+          tahun:          activeSnap.tahun,
+          file_b_name:    activeSnap.file_name,
+          sheet_a:        "Master",
+          sheet_b:        `OSCLN-${activeSnap.file_name}`,
+          status:         "done",
+        });
+      }
     } catch (e) { setRecError(e.message); }
     finally { setReconciling(false); }
   };

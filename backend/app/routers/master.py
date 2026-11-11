@@ -4,8 +4,6 @@ Handles single-file upload → append to Master, and Master data retrieval.
 All endpoints are scoped to the caller's session_id (X-Session-ID header).
 export endpoint accepts session_id as a query param (window.location.href workaround).
 """
-import csv
-import io
 import json
 import logging
 from typing import Optional
@@ -101,8 +99,8 @@ async def upload_to_master(
     # ── Append ke master_data — dedup hanya dalam session yang sama ──
     appended = 0
     skipped  = 0
-    batch    = []
 
+    # Ambil semua PK yang sudah ada dalam satu query
     existing_pks = set(
         row[0] for row in
         db.query(MasterData.primary_key_value)
@@ -111,34 +109,35 @@ async def upload_to_master(
           .all()
     )
 
+    sheet_val = result.get("sheet", "")
+    mappings  = []
+
     for r in result["rows"]:
         if r["pk"] in existing_pks:
             skipped += 1
             continue
-        r["data"].setdefault("sheet", result["sheet"])
-        # Simpan cedant ke dalam row_data agar bisa di-lookup dari frontend
-        if cedant:
-            r["data"].setdefault("_cedant", cedant)
-        batch.append(MasterData(
-            session_id=session_id,
-            tipe_data=tipe_data,
-            bulan=bulan,
-            tahun=tahun,
-            cedant=cedant or None,
-            primary_key_value=r["pk"],
-            source_job_id=job.id,
-            row_data=json.dumps(r["data"], ensure_ascii=False),
-        ))
         existing_pks.add(r["pk"])
         appended += 1
 
-        if len(batch) >= 500:
-            db.bulk_save_objects(batch)
-            db.commit()
-            batch = []
+        r["data"].setdefault("sheet", sheet_val)
+        if cedant:
+            r["data"].setdefault("_cedant", cedant)
 
-    if batch:
-        db.bulk_save_objects(batch)
+        mappings.append({
+            "session_id":         session_id,
+            "tipe_data":          tipe_data,
+            "bulan":              bulan,
+            "tahun":              tahun,
+            "cedant":             cedant or None,
+            "primary_key_value":  r["pk"],
+            "source_job_id":      job.id,
+            "row_data":           json.dumps(r["data"], ensure_ascii=False),
+        })
+
+    # Satu kali bulk insert — jauh lebih cepat dari loop per-baris
+    BATCH = 2000
+    for i in range(0, len(mappings), BATCH):
+        db.bulk_insert_mappings(MasterData, mappings[i : i + BATCH])
         db.commit()
 
     job.status        = "done"
@@ -213,13 +212,18 @@ def list_upload_jobs(
 # ─────────────────────────────────────────────
 # GET /api/master/export  (session_id via query param — browser nav)
 # ─────────────────────────────────────────────
-@router.get("/export", summary="Export Master data sebagai CSV")
-def export_master_csv(
+@router.get("/export", summary="Export Master data sebagai Excel")
+def export_master_excel(
     session_id: str           = Query(..., alias="session_id"),
     tipe_data:  Optional[str] = Query(None),
     cedant:     Optional[str] = Query(None),
     db:         Session       = Depends(get_db),
 ):
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from io import BytesIO
+
     q = db.query(MasterData).filter(MasterData.session_id == session_id)
     if tipe_data:
         q = q.filter(MasterData.tipe_data == tipe_data)
@@ -228,55 +232,198 @@ def export_master_csv(
 
     rows = q.order_by(MasterData.id.asc()).all()
 
-    dynamic_cols: list[str] = []
-    parsed_rows:  list[dict] = []
-    for r in rows:
+    # ── Kolom tetap (meta) yang selalu muncul di depan ──────────────────
+    META_COLS = ["No", "Cedant", "Sheet", "Loss Ref", "Outstanding",
+                 "Date of Loss", "Tipe Data", "Bulan", "Tahun", "Upload ID"]
+
+    # ── Regex helper untuk cari nilai dari row_data ──────────────────────
+    import re
+
+    def _find(data: dict, *patterns):
+        for pat in patterns:
+            for k, v in data.items():
+                if re.search(pat, k, re.IGNORECASE):
+                    val = str(v).strip() if v is not None else ""
+                    if val and val.lower() not in ("", "nan", "none"):
+                        return val
+        return ""
+
+    # ── Build rows ───────────────────────────────────────────────────────
+    excel_rows = []
+    for i, r in enumerate(rows, start=1):
         try:
             data = json.loads(r.row_data) if r.row_data else {}
         except Exception:
             data = {}
-        parsed_rows.append(data)
-        for k in data.keys():
-            if k not in dynamic_cols:
-                dynamic_cols.append(k)
 
-    meta_cols  = ["id", "tipe_data", "bulan", "tahun", "cedant",
-                  "primary_key_value", "source_job_id", "created_at"]
-    fieldnames = meta_cols + dynamic_cols
+        sheet = data.get("sheet") or data.get("Sheet") or ""
 
-    def generate():
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=fieldnames,
-                                extrasaction="ignore", lineterminator="\n")
-        writer.writeheader()
-        yield buf.getvalue()
-        for r, data in zip(rows, parsed_rows):
-            buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=fieldnames,
-                                    extrasaction="ignore", lineterminator="\n")
-            writer.writerow({
-                "id":                r.id,
-                "tipe_data":         r.tipe_data,
-                "bulan":             r.bulan,
-                "tahun":             r.tahun,
-                "cedant":            r.cedant or "",
-                "primary_key_value": r.primary_key_value,
-                "source_job_id":     r.source_job_id,
-                "created_at":        r.created_at.isoformat() if r.created_at else "",
-                **data,
-            })
-            yield buf.getvalue()
+        outstanding = _find(
+            data,
+            r"^Orig Currency Amt$",
+            r"^Amount_Net_OS$",
+            r"^outstanding$",
+            r"^net_outstanding$",
+            r"^OS$",
+            r"^net_os$",
+            r"^R/I Share Amount$",
+            r"^Remain OS",
+            r"^Outstanding Claim$",
+            r"^Sum of Outstanding$",
+            r"^RENDO SHARE$",
+            r"^NET BALANCE$",
+            r"^NET_AMT$",
+            r"^Saldo Akhir Tagih$",
+            r"^AMOUNT$",
+            r"outstanding|balance",
+        )
+
+        dol = _find(
+            data,
+            r"^Trans Desc/DOL$",
+            r"^DOL$",
+            r"^DOL \(Date of Loss\)$",
+            r"^DATE OF LOSS$",
+            r"^Date of Loss$",
+            r"^date_of_loss$",
+            r"^loss_date$",
+            r"^Tgl\. DOL$",
+            r"^DOCL$",
+            r"^Loss Date$",
+            r"^D\.O\.L$",
+            r"^LossClaim$",
+            r"^tg_kejadian$",
+            r"date.*loss|loss.*date|\bdol\b",
+        )
+
+        excel_rows.append({
+            "No":          i,
+            "Cedant":      r.cedant or data.get("_cedant") or "",
+            "Sheet":       sheet,
+            "Loss Ref":    r.primary_key_value or "",
+            "Outstanding": outstanding,
+            "Date of Loss":dol,
+            "Tipe Data":   r.tipe_data or "",
+            "Bulan":       r.bulan or "",
+            "Tahun":       r.tahun or "",
+            "Upload ID":   r.source_job_id or "",
+        })
+
+    # ── Build workbook ───────────────────────────────────────────────────
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Master Data"
+
+    # Style constants
+    TEAL        = "1E6E6E"
+    TEAL_LIGHT  = "E6F4F4"
+    GRAY_BORDER = Side(style="thin", color="D1D5DB")
+    THIN_BORDER = Border(left=GRAY_BORDER, right=GRAY_BORDER,
+                         top=GRAY_BORDER,  bottom=GRAY_BORDER)
+
+    HEADER_FILL = PatternFill("solid", fgColor=TEAL)
+    HEADER_FONT = Font(bold=True, color="FFFFFF", size=10)
+    HEADER_ALIGN= Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ALT_FILL    = PatternFill("solid", fgColor=TEAL_LIGHT)
+    NORMAL_FILL = PatternFill("solid", fgColor="FFFFFF")
+    DATA_ALIGN  = Alignment(vertical="center")
+    NUM_ALIGN   = Alignment(horizontal="right", vertical="center")
+
+    # ── Title row ────────────────────────────────────────────────────────
+    ws.merge_cells(f"A1:{get_column_letter(len(META_COLS))}1")
+    title_cell = ws["A1"]
+    label = f"Master {tipe_data or 'Data'}" + (f" — {cedant}" if cedant else "")
+    title_cell.value = label
+    title_cell.font  = Font(bold=True, size=13, color=TEAL)
+    title_cell.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 28
+
+    # ── Header row ───────────────────────────────────────────────────────
+    for ci, col in enumerate(META_COLS, start=1):
+        cell = ws.cell(row=2, column=ci, value=col)
+        cell.fill      = HEADER_FILL
+        cell.font      = HEADER_FONT
+        cell.alignment = HEADER_ALIGN
+        cell.border    = THIN_BORDER
+    ws.row_dimensions[2].height = 22
+
+    # ── Data rows ────────────────────────────────────────────────────────
+    for ri, row_dict in enumerate(excel_rows, start=3):
+        fill = ALT_FILL if ri % 2 == 0 else NORMAL_FILL
+        for ci, col in enumerate(META_COLS, start=1):
+            val  = row_dict.get(col, "")
+            cell = ws.cell(row=ri, column=ci, value=val)
+            cell.fill   = fill
+            cell.border = THIN_BORDER
+
+            # Number alignment for numeric columns
+            if col in ("No", "Upload ID"):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col == "Outstanding":
+                # Try to store as number for Excel formatting
+                try:
+                    num = float(str(val).replace(",", "").replace(" ", ""))
+                    cell.value     = num
+                    cell.number_format = '#,##0.00'
+                    cell.alignment = NUM_ALIGN
+                except (ValueError, TypeError):
+                    cell.alignment = DATA_ALIGN
+            else:
+                cell.alignment = DATA_ALIGN
+
+    # ── Column widths ─────────────────────────────────────────────────────
+    COL_WIDTHS = {
+        "No":          6,
+        "Cedant":      28,
+        "Sheet":       22,
+        "Loss Ref":    30,
+        "Outstanding": 18,
+        "Date of Loss":16,
+        "Tipe Data":   16,
+        "Bulan":        8,
+        "Tahun":        8,
+        "Upload ID":    10,
+    }
+    for ci, col in enumerate(META_COLS, start=1):
+        ws.column_dimensions[get_column_letter(ci)].width = COL_WIDTHS.get(col, 15)
+
+    # ── Freeze panes at header ────────────────────────────────────────────
+    ws.freeze_panes = "A3"
+
+    # ── Auto-filter ───────────────────────────────────────────────────────
+    ws.auto_filter.ref = f"A2:{get_column_letter(len(META_COLS))}2"
+
+    # ── Sheet info ────────────────────────────────────────────────────────
+    ws_info = wb.create_sheet("Info")
+    ws_info["A1"] = "Export Info"
+    ws_info["A1"].font = Font(bold=True, size=12)
+    info_data = [
+        ("Tipe Data",   tipe_data or "Semua"),
+        ("Cedant",      cedant    or "Semua"),
+        ("Total Baris", len(excel_rows)),
+        ("Diekspor",    __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
+    ]
+    for i, (k, v) in enumerate(info_data, start=2):
+        ws_info.cell(row=i, column=1, value=k).font = Font(bold=True)
+        ws_info.cell(row=i, column=2, value=v)
+    ws_info.column_dimensions["A"].width = 18
+    ws_info.column_dimensions["B"].width = 30
+
+    # ── Serialize ─────────────────────────────────────────────────────────
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
 
     safe_tipe   = (tipe_data or "all").replace(" ", "_")
     safe_cedant = f"_{cedant.replace(' ', '_')}" if cedant else ""
-    filename    = f"master_{safe_tipe}{safe_cedant}.csv"
+    filename    = f"master_{safe_tipe}{safe_cedant}.xlsx"
 
     return StreamingResponse(
-        generate(),
-        media_type="text/csv; charset=utf-8",
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition":  f'attachment; filename="{filename}"',
-            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
 

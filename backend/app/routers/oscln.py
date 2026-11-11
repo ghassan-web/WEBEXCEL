@@ -7,7 +7,6 @@ import json
 import logging
 from typing import Optional
 
-import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
@@ -16,7 +15,7 @@ from ..models import (
     MasterData, ComparisonJob, ComparisonResult,
     OsclnSnapshot, OsclnRow,
 )
-from ..services.excel_service import ingest_csv, compare_dataframes
+from ..services.excel_service import ingest_csv
 
 router = APIRouter(prefix="/api/oscln", tags=["oscln"])
 logger = logging.getLogger(__name__)
@@ -156,10 +155,7 @@ def run_reconciliation(
             data[pk] = r.primary_key_value
         if r.cedant and not any(k.lower() == "cedant" for k in data):
             data["cedant"] = r.cedant
-        master_records.append(data)
-
-    df_master = pd.DataFrame(master_records).astype(str)
-    df_master.fillna("", inplace=True)
+        master_records.append((r.primary_key_value, data))
 
     # ── Load OSCLN rows ──
     oscln_rows = (
@@ -173,7 +169,7 @@ def run_reconciliation(
             detail=f"Snapshot #{snapshot_id} tidak memiliki baris data.",
         )
 
-    oscln_records = []
+    oscln_map: dict = {}
     for r in oscln_rows:
         try:
             data = json.loads(r.row_data) if r.row_data else {}
@@ -181,25 +177,55 @@ def run_reconciliation(
             data = {}
         if pk not in data:
             data[pk] = r.primary_key_value
-        oscln_records.append(data)
+        oscln_map[str(r.primary_key_value).strip()] = data
 
-    df_oscln = pd.DataFrame(oscln_records).astype(str)
-    df_oscln.fillna("", inplace=True)
+    # ── Key-only matching (OSCLN reconciliation) ──────────────────────────
+    # Untuk OSCLN, "matched" = key ada di kedua sumber (tidak peduli nilai kolom).
+    # "changed" dari compare_dataframes tidak relevan di sini karena kolom Master
+    # dan OSCLN berbeda — semua key-match dianggap MATCHED_1_TO_1.
+    results_list = []
+    summary = {"matched": 0, "only_in_a": 0, "only_in_b": 0, "changed": 0}
 
-    # ── Run comparison ──
-    try:
-        result = compare_dataframes(
-            df_a=df_master,
-            df_b=df_oscln,
-            primary_key_col=pk,
-            label_a="Master",
-            label_b=f"OSCLN-{snapshot.file_name}",
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.exception("Error during reconciliation")
-        raise HTTPException(status_code=500, detail=f"Rekonsiliasi gagal: {e}")
+    master_keys_seen = set()
+    for pk_val, master_data in master_records:
+        key = str(pk_val).strip()
+        master_keys_seen.add(key)
+        if key in oscln_map:
+            summary["matched"] += 1
+            results_list.append({
+                "primary_key_value": key,
+                "diff_type":         "matched",
+                "row_data_a":        master_data,
+                "row_data_b":        oscln_map[key],
+                "changed_columns":   [],
+            })
+        else:
+            summary["only_in_a"] += 1
+            results_list.append({
+                "primary_key_value": key,
+                "diff_type":         "only_in_a",
+                "row_data_a":        master_data,
+                "row_data_b":        None,
+                "changed_columns":   [],
+            })
+
+    for key, oscln_data in oscln_map.items():
+        if key not in master_keys_seen:
+            summary["only_in_b"] += 1
+            results_list.append({
+                "primary_key_value": key,
+                "diff_type":         "only_in_b",
+                "row_data_a":        None,
+                "row_data_b":        oscln_data,
+                "changed_columns":   [],
+            })
+
+    result = {
+        "summary":      summary,
+        "total_rows_a": len(master_records),
+        "total_rows_b": len(oscln_map),
+        "results":      results_list,
+    }
 
     # ── Persist ComparisonJob — tagged with session ──
     s = result["summary"]

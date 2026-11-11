@@ -201,6 +201,7 @@ export async function deleteLibraryEntry(jobId) {
 
 /**
  * GET /api/master/export  (browser nav → query param)
+ * Downloads as .xlsx
  */
 export function exportMasterCsv(tipeData, cedant) {
   const params = new URLSearchParams({ session_id: getSessionId() });

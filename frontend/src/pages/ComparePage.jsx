@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect } from "react";
+﻿import { useState, useRef } from "react";
 import { useMasterUpload } from "../hooks/useMasterUpload";
 import { PROFILES_OS, PROFILES_INFOPACK } from "../services/mappingData";
 import {
@@ -49,13 +49,13 @@ function CutOffPicker({ bulan, tahun, onBulan, onTahun, disabled }) {
       <div
         onClick={() => !disabled && setOpen(o => !o)}
         className={[
-          "flex items-center border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white cursor-pointer select-none",
+          "flex items-center border rounded-lg px-3 py-2 text-sm bg-white cursor-pointer select-none",
           disabled ? "opacity-50 pointer-events-none" : "hover:border-teal-400",
-          !bulan ? "border-amber-300 ring-1 ring-amber-200" : "",
+          !bulan ? "border-amber-300 ring-1 ring-amber-200" : "border-gray-200",
         ].join(" ")}
       >
         <span className={`flex-1 ${displayVal ? "text-gray-700" : "text-gray-400"}`}>
-          {displayVal || "Pilih bulan dulu…"}
+          {displayVal || "Pilih bulan…"}
         </span>
         <CalendarIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
       </div>
@@ -102,14 +102,14 @@ function DropZone({ file, onFile, disabled }) {
         className={[
           "rounded-xl border-2 border-dashed px-4 py-8 transition-all flex flex-col items-center justify-center gap-2 min-h-[140px]",
           drag ? "border-teal-500 bg-teal-50" : "border-teal-200 bg-white",
-          disabled ? "opacity-50" : "",
+          disabled ? "opacity-50 cursor-not-allowed" : "",
         ].join(" ")}
       >
         {!file ? (
           <>
-            <CloudArrowUpIcon className="h-10 w-10 text-teal-500" />
-            <p className="text-sm font-bold text-gray-700">Drop Excel files here</p>
-            <p className="text-xs text-gray-400">Format .xlsx / .xls · Maks. 8 MB per file</p>
+            <CloudArrowUpIcon className="h-10 w-10 text-teal-400" />
+            <p className="text-sm font-bold text-gray-700">Drop file Excel di sini</p>
+            <p className="text-xs text-gray-400">Format .xlsx / .xls · Maks. 50 MB</p>
           </>
         ) : (
           <div className="w-full flex items-center gap-2 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2">
@@ -152,27 +152,14 @@ export default function ComparePage({ onNavigate }) {
   const jenisTipe  = activeTab === "os" ? "OS Cedant" : "Infopack";
   const isInfopack = activeTab === "infopack";
 
-  // Daftar cedant unik dari PROFILES (sorted A-Z)
   const allProfiles   = isInfopack ? PROFILES_INFOPACK : PROFILES_OS;
   const uniqueCedants = [...new Set(allProfiles.map(p => p.cedant))].sort((a, b) =>
     a.localeCompare(b, "id")
   );
 
-  // Profil milik cedant yang dipilih
   const activeProfiles = allProfiles.filter(p => p.cedant === form.cedant);
   const currentProfile = activeProfiles[selectedProfileIdx] ?? activeProfiles[0] ?? null;
-
-  // Composite key detection
-  const isComposite = currentProfile?.lossRef?.includes("|") ?? false;
-
-  /* ── Auto-submit saat file tersedia dan bulan sudah dipilih ── */
-  useEffect(() => {
-    if (!file || !form.bulan || loading) return;
-    // Pastikan tipe_data terisi
-    if (!form.tipe_data) updateForm("tipe_data", jenisTipe);
-    submit();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file]);
+  const isComposite    = currentProfile?.lossRef?.includes("|") ?? false;
 
   /* ── handlers ── */
   const handleTabChange = (tab) => {
@@ -196,13 +183,19 @@ export default function ComparePage({ onNavigate }) {
     const pk = (profiles[0]?.lossRef && profiles[0].lossRef !== "—")
       ? profiles[0].lossRef : "";
     updateForm("primary_key_col", pk);
+    // Auto-set sheet dari profil pertama jika tersedia
+    if (profiles[0]?.sheetMet) {
+      updateForm("sheet_name", profiles[0].sheetMet);
+    }
   };
 
   const handleProfileChange = (idx) => {
     const i = Number(idx);
     setSelectedProfileIdx(i);
-    const pk = activeProfiles[i]?.lossRef ?? "";
-    if (pk && pk !== "—") updateForm("primary_key_col", pk);
+    const p = activeProfiles[i];
+    if (!p) return;
+    if (p.lossRef && p.lossRef !== "—") updateForm("primary_key_col", p.lossRef);
+    if (p.sheetMet) updateForm("sheet_name", p.sheetMet);
   };
 
   const handleCompositePartChange = (part, value) => {
@@ -211,6 +204,20 @@ export default function ComparePage({ onNavigate }) {
     if (part === "left")  parts[0] = value;
     else                  parts[1] = value;
     updateForm("primary_key_col", parts.join("|"));
+  };
+
+  /**
+   * handleFilePick — pass preferredSheet dari mapping ke hook
+   * agar sheet di-auto-resolve sebelum user klik Upload.
+   */
+  const handleFilePick = (f) => {
+    const preferred = currentProfile?.sheetMet ?? null;
+    handleFileChange(f, preferred);
+  };
+
+  const handleSubmit = () => {
+    if (!form.tipe_data) updateForm("tipe_data", jenisTipe);
+    submit();
   };
 
   /* ── render ── */
@@ -228,13 +235,13 @@ export default function ComparePage({ onNavigate }) {
         </div>
         <button onClick={() => { reset(); setSelectedProfileIdx(0); }} disabled={loading}
           className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40">
-          <ArrowPathIcon className="h-3.5 w-3.5" /> ↺ Refresh
+          <ArrowPathIcon className="h-3.5 w-3.5" /> &#x21BA; Refresh
         </button>
       </div>
 
       <div className="px-6 py-6 max-w-2xl w-full flex flex-col gap-5">
 
-        {/* ── Tabs ── */}
+        {/* Tabs */}
         <div className="flex gap-0 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
           {[["os","OS Claim Cedant"],["infopack","InfoPack"]].map(([key, label]) => (
             <button key={key} onClick={() => handleTabChange(key)}
@@ -249,24 +256,20 @@ export default function ComparePage({ onNavigate }) {
           ))}
         </div>
 
-        {/* ── Section title ── */}
+        {/* Section title */}
         <div>
           <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">DATA INGESTION</p>
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-extrabold text-gray-800">Upload Data</h2>
-              <p className="text-xs text-gray-400 mt-1">
-                Pilih jenis data dan bulan cut-off sebelum upload. Setiap file dicatat otomatis dengan waktu upload dan riwayat aktivitas.
-              </p>
-            </div>
-          </div>
+          <h2 className="text-2xl font-extrabold text-gray-800">Upload Data</h2>
+          <p className="text-xs text-gray-400 mt-1">
+            Pilih jenis data dan bulan cut-off sebelum upload. Setiap file dicatat otomatis dengan waktu upload dan riwayat aktivitas.
+          </p>
         </div>
 
         {/* Upload panel */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col gap-5">
           <div>
             <h3 className="text-base font-bold text-gray-800">Upload from Computer</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Pilih file Excel — upload otomatis dimulai setelah file dipilih.</p>
+            <p className="text-xs text-gray-400 mt-0.5">Lengkapi form lalu klik Upload ke Master.</p>
           </div>
 
           {/* Bulan Cut-Off */}
@@ -277,15 +280,7 @@ export default function ComparePage({ onNavigate }) {
             disabled={loading}
           />
 
-          {/* Peringatan jika bulan belum dipilih */}
-          {!form.bulan && (
-            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-2 rounded-lg text-xs">
-              <InformationCircleIcon className="h-4 w-4 flex-shrink-0" />
-              Pilih <strong>Bulan Cut-Off</strong> terlebih dahulu sebelum memilih file.
-            </div>
-          )}
-
-          {/* Row 2: Cedant / Sumber (opsional) */}
+          {/* Cedant / Sumber */}
           <div>
             <Label htmlFor="cedant_local" text="Cedant / Sumber" optional />
             <div className="relative">
@@ -297,7 +292,7 @@ export default function ComparePage({ onNavigate }) {
                   <option key={val} value={val}>{val}</option>
                 ))}
               </select>
-              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
+              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">&#9660;</span>
             </div>
 
             {!form.cedant && (
@@ -321,35 +316,35 @@ export default function ComparePage({ onNavigate }) {
                     className={SEL + " pr-8"}>
                     {activeProfiles.map((p, i) => (
                       <option key={i} value={i}>
-                        {p.sheetMet} — {p.lossRef !== "—" ? p.lossRef : "—"}
+                        {p.sheetMet} &mdash; {p.lossRef !== "—" ? p.lossRef : "—"}
                       </option>
                     ))}
                   </select>
-                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
+                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">&#9660;</span>
                 </div>
                 {currentProfile && (
                   <p className="text-xs text-teal-600 mt-1">
                     Primary key: <strong className="font-mono">{currentProfile.lossRef}</strong>
                     {currentProfile.outstanding && currentProfile.outstanding !== "—" &&
-                      <> · OS: {currentProfile.outstanding}</>}
+                      <> &middot; OS: {currentProfile.outstanding}</>}
                   </p>
                 )}
               </div>
             )}
 
-            {/* Single profil: tampilkan info auto-fill */}
+            {/* Single profil: info auto-fill */}
             {form.cedant && activeProfiles.length === 1 && currentProfile && (
               <div className="mt-1.5 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 flex flex-col gap-0.5">
                 <div className="flex items-center gap-1.5">
                   <InformationCircleIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
                   <span className="text-xs text-teal-700">
                     Sheet: <strong>{currentProfile.sheetMet}</strong>
-                    {" "}· Key: <strong className="font-mono">{currentProfile.lossRef}</strong>
+                    {" "}&middot; Key: <strong className="font-mono">{currentProfile.lossRef}</strong>
                   </span>
                 </div>
                 {currentProfile.outstanding && currentProfile.outstanding !== "—" && (
                   <p className="text-xs text-teal-600 ml-5">
-                    Outstanding: {currentProfile.outstanding} · DOL: {currentProfile.dateOfLoss}
+                    Outstanding: {currentProfile.outstanding} &middot; DOL: {currentProfile.dateOfLoss}
                   </p>
                 )}
               </div>
@@ -363,23 +358,19 @@ export default function ComparePage({ onNavigate }) {
                   <input type="text"
                     value={(form.primary_key_col || currentProfile?.lossRef || "").split("|")[0] ?? ""}
                     onChange={e => handleCompositePartChange("left", e.target.value)}
-                    disabled={loading}
-                    className={SEL + " font-mono text-xs"}
-                  />
+                    disabled={loading} className={SEL + " font-mono text-xs"} />
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1">Kolom 2</label>
                   <input type="text"
                     value={(form.primary_key_col || currentProfile?.lossRef || "").split("|")[1] ?? ""}
                     onChange={e => handleCompositePartChange("right", e.target.value)}
-                    disabled={loading}
-                    className={SEL + " font-mono text-xs"}
-                  />
+                    disabled={loading} className={SEL + " font-mono text-xs"} />
                 </div>
               </div>
             )}
 
-            {/* Override PK manual (single, non-composite) */}
+            {/* Override PK manual */}
             {form.cedant && !isComposite && activeProfiles.length > 0 && (
               <div className="mt-2">
                 <label className="block text-xs text-gray-500 mb-1">
@@ -390,13 +381,12 @@ export default function ComparePage({ onNavigate }) {
                   onChange={e => updateForm("primary_key_col", e.target.value)}
                   disabled={loading}
                   placeholder={currentProfile?.lossRef || "Nama kolom…"}
-                  className={SEL + " font-mono text-xs"}
-                />
+                  className={SEL + " font-mono text-xs"} />
               </div>
             )}
           </div>
 
-          {/* Sheet selector (dari file yang diupload) */}
+          {/* Sheet selector — muncul setelah file dipilih dan ada >1 sheet */}
           {sheets.length > 1 && (
             <div>
               <Label htmlFor="sheet_name" text="Sheet" optional />
@@ -404,10 +394,10 @@ export default function ComparePage({ onNavigate }) {
                 <select id="sheet_name" value={form.sheet_name}
                   onChange={e => updateForm("sheet_name", e.target.value)}
                   disabled={loading} className={SEL + " pr-8"}>
-                  <option value="">— Sheet pertama (default) —</option>
+                  <option value="">&#8212; Sheet pertama (default) &#8212;</option>
                   {sheets.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
-                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">▼</span>
+                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">&#9660;</span>
               </div>
               {form.cedant && currentProfile && sheets.includes(currentProfile.sheetMet) && form.sheet_name !== currentProfile.sheetMet && (
                 <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
@@ -419,7 +409,7 @@ export default function ComparePage({ onNavigate }) {
           )}
 
           {/* Drop zone */}
-          <DropZone file={file} onFile={handleFileChange} disabled={loading || !form.bulan} />
+          <DropZone file={file} onFile={handleFilePick} disabled={loading} />
 
           {/* Progress */}
           {loading && uploadPct > 0 && uploadPct < 100 && (
@@ -464,13 +454,13 @@ export default function ComparePage({ onNavigate }) {
               <div>
                 <p className="font-bold text-sm text-teal-800">Upload berhasil!</p>
                 <p className="mt-1 text-teal-700 leading-relaxed">
-                  <strong>{result.rows_appended?.toLocaleString("id-ID")}</strong> baris ditambahkan ke Master ·{" "}
-                  <strong>{result.rows_skipped?.toLocaleString("id-ID")}</strong> dilewati ·{" "}
+                  <strong>{result.rows_appended?.toLocaleString("id-ID")}</strong> baris ditambahkan ke Master &middot;{" "}
+                  <strong>{result.rows_skipped?.toLocaleString("id-ID")}</strong> dilewati &middot;{" "}
                   Total <strong>{result.total_rows?.toLocaleString("id-ID")}</strong> baris diproses
                 </p>
                 <p className="mt-1 text-teal-600">
                   Sheet: <code className="bg-teal-100 px-1.5 py-0.5 rounded font-mono">{result.sheet}</code>
-                  {" "}· Lihat di{" "}
+                  {" "}&middot; Lihat di{" "}
                   <button onClick={() => onNavigate?.("master")} className="font-bold underline">Master</button>
                   {" "}atau{" "}
                   <button onClick={() => onNavigate?.("library_os")} className="font-bold underline">Library</button>.
@@ -478,6 +468,13 @@ export default function ComparePage({ onNavigate }) {
               </div>
             </div>
           )}
+
+          {/* Submit button */}
+          <button type="button" onClick={handleSubmit} disabled={loading || !file}
+            className="w-full flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 text-white text-sm font-semibold px-4 py-3 rounded-xl transition-colors">
+            <ArrowUpTrayIcon className="h-4 w-4" />
+            {loading ? "Mengunggah…" : "Upload ke Master"}
+          </button>
 
         </div>
       </div>

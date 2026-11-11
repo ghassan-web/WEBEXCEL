@@ -194,7 +194,7 @@ def _open_excel_file(file_bytes: bytes) -> Tuple[pd.ExcelFile, Optional[str]]:
         ) from exc
 
 
-def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 100) -> int:
+def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 40) -> int:
     """
     Scan the first `max_scan` rows to find the best header row.
     Works for .xlsx, .xls, and .xlsb files.
@@ -280,6 +280,10 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 100) ->
         if score > best_score:
             best_score = score
             best_row   = i
+            # Early-exit: baris dengan banyak kolom text label yang distinct
+            # hampir pasti header — tidak perlu scan lebih jauh
+            if score >= len(values) * 3 and distinct >= 4:
+                break
 
     # ── Post-validation: verify chosen row doesn't produce mostly Unnamed columns ──
     # If > 50% of columns are Unnamed after using best_row as header, try next best.

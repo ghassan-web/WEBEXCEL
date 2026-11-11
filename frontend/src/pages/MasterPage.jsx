@@ -249,7 +249,7 @@ export default function MasterPage() {
               disabled={exporting || totalRows === 0}
               className="flex items-center gap-1.5 text-xs text-white bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300 px-3 py-2 rounded-lg transition-colors font-semibold">
               <ArrowDownTrayIcon className={`h-3.5 w-3.5 ${exporting ? "animate-bounce" : ""}`} />
-              {exporting ? "Mengunduh…" : "Export CSV"}
+              {exporting ? "Mengunduh…" : "Export Excel"}
             </button>
             <button
               className="flex items-center gap-1.5 text-xs text-gray-600 border border-gray-200 bg-white hover:bg-gray-50 px-3 py-2 rounded-lg transition-colors"

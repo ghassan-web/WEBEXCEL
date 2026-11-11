@@ -26,22 +26,35 @@ export function useMasterUpload() {
     setForm(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  const handleFileChange = useCallback(async (f) => {
+  /**
+   * handleFileChange
+   * @param {File|null} f
+   * @param {string|null} preferredSheet - sheet dari currentProfile.sheetMet
+   */
+  const handleFileChange = useCallback(async (f, preferredSheet = null) => {
     setFile(f);
     setSheets([]);
-    updateForm("sheet_name", "");
-    if (f) {
-      try {
-        const data = await getSheetNames(f);
-        const sheetList = data.sheets || [];
-        setSheets(sheetList);
-        // Auto-select jika hanya ada 1 sheet
-        if (sheetList.length === 1) {
-          updateForm("sheet_name", sheetList[0]);
-        }
-      } catch (_) {}
-    }
-  }, [updateForm]);
+    setForm(prev => ({ ...prev, sheet_name: "" }));
+
+    if (!f) return;
+
+    try {
+      const data = await getSheetNames(f);
+      const sheetList = data.sheets || [];
+      setSheets(sheetList);
+
+      let resolved = "";
+      if (preferredSheet && sheetList.includes(preferredSheet)) {
+        resolved = preferredSheet;
+      } else if (sheetList.length === 1) {
+        resolved = sheetList[0];
+      }
+
+      if (resolved) {
+        setForm(prev => ({ ...prev, sheet_name: resolved }));
+      }
+    } catch (_) {}
+  }, []);
 
   const reset = useCallback(() => {
     setForm(INITIAL_FORM);
@@ -58,7 +71,6 @@ export function useMasterUpload() {
     if (!form.tipe_data) return setError("Jenis Data wajib dipilih.");
     if (!file)           return setError("File Excel wajib diunggah lewat drop zone.");
 
-    // Cedant opsional — jika diisi, PK harus ada
     if (form.cedant && !form.primary_key_col.trim()) {
       return setError("Kolom Primary Key wajib diisi. Pilih profil sheet atau ketik nama kolom secara manual.");
     }
@@ -73,7 +85,6 @@ export function useMasterUpload() {
       fd.append("bulan",     form.bulan);
       fd.append("tahun",     form.tahun);
       fd.append("tipe_data", form.tipe_data);
-      // Hanya kirim primary_key_col jika cedant dipilih dan PK terisi
       if (form.cedant && form.primary_key_col.trim()) {
         fd.append("primary_key_col", form.primary_key_col.trim());
       }

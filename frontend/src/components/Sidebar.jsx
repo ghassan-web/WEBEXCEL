@@ -101,8 +101,8 @@ export default function Sidebar({ activePage, onNavigate }) {
         className="mx-3 mb-4 px-3 py-3 rounded-xl text-xs text-brand-300"
         style={{ background: "rgba(0,0,0,0.15)" }}
       >
-        <p className="font-semibold text-white mb-0.5">Reference mapping</p>
-        <p className="leading-relaxed opacity-80">Read only · Google Sheets</p>
+        <p className="font-semibold text-white mb-0.5">Database mapping</p>
+        <p className="leading-relaxed opacity-80">Read only · master_upload_column_mapping</p>
       </div>
     </aside>
   );

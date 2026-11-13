@@ -1,6 +1,6 @@
 ﻿import { useState, useRef } from "react";
 import { useMasterUpload } from "../hooks/useMasterUpload";
-import { PROFILES_OS, PROFILES_INFOPACK } from "../services/mappingData";
+import { useColumnMappings } from "../hooks/useColumnMappings";
 import {
   ArrowUpTrayIcon,
   ArrowPathIcon,
@@ -137,6 +137,7 @@ function DropZone({ file, onFile, disabled }) {
    MAIN PAGE
 ═══════════════════════════════════════════════════════════ */
 export default function ComparePage({ onNavigate }) {
+  const { profiles, loading: mappingsLoading, error: mappingsError } = useColumnMappings();
   const {
     form, updateForm,
     file, handleFileChange,
@@ -152,7 +153,7 @@ export default function ComparePage({ onNavigate }) {
   const jenisTipe  = activeTab === "os" ? "OS Cedant" : "Infopack";
   const isInfopack = activeTab === "infopack";
 
-  const allProfiles   = isInfopack ? PROFILES_INFOPACK : PROFILES_OS;
+  const allProfiles   = profiles.filter(p => p.tipe_data === (isInfopack ? "Infopack" : "OS Cedant"));
   const uniqueCedants = [...new Set(allProfiles.map(p => p.cedant))].sort((a, b) =>
     a.localeCompare(b, "id")
   );
@@ -294,7 +295,7 @@ export default function ComparePage({ onNavigate }) {
               <select id="cedant_local" value={form.cedant}
                 onChange={e => handleCedantChange(e.target.value)}
                 disabled={loading} className={SEL + " pr-8"}>
-                <option value="">Auto-detect dari mapping</option>
+                <option value="">Auto-detect dari mapping database</option>
                 {uniqueCedants.map(val => (
                   <option key={val} value={val}>{val}</option>
                 ))}
@@ -304,7 +305,15 @@ export default function ComparePage({ onNavigate }) {
 
             {!form.cedant && (
               <p className="text-xs text-gray-400 mt-1.5">
-                OS Claim dipindai berdasarkan mapping warna dan dapat di-append ke Master.
+                OS Claim dipindai berdasarkan mapping database dan dapat di-append ke Master.
+              </p>
+            )}
+            {mappingsLoading && (
+              <p className="text-xs text-gray-400 mt-1.5">Memuat mapping database…</p>
+            )}
+            {mappingsError && (
+              <p role="alert" className="text-xs text-red-600 mt-1.5">
+                Mapping database gagal dimuat: {mappingsError}
               </p>
             )}
 

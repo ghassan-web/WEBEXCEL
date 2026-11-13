@@ -164,40 +164,121 @@ def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict
     """
     if not cedant_code:
         return {}
-    try:
-        rows = db.execute(
-            text(
-                "SELECT m.excel_name, f.field_name, m.argument "
-                "FROM master_upload_column_mapping m "
-                "JOIN master_field f ON f.id = m.field_id "
-                "WHERE m.cedant_code = :cc AND m.is_active = TRUE"
-            ),
-            {"cc": cedant_code},
-        ).mappings().all()
+    rows = db.execute(
+        text(
+            "SELECT m.excel_name, f.field_name, m.argument "
+            "FROM master_upload_column_mapping m "
+            "JOIN master_field f ON f.id = m.field_id "
+            "WHERE m.cedant_code = :cc AND m.is_active = TRUE"
+        ),
+        {"cc": cedant_code},
+    ).mappings().all()
 
-        mapping = {}
-        for r in rows:
-            excel_name = r.get("excel_name") or ""
-            field_name = r.get("field_name") or ""
-            if not excel_name or not field_name:
+    mapping = {}
+    for row in rows:
+        excel_name = row.get("excel_name") or ""
+        field_name = row.get("field_name") or ""
+        if not excel_name or not field_name:
+            continue
+
+        argument = row.get("argument") or {}
+        if isinstance(argument, str):
+            argument = json.loads(argument)
+        if not isinstance(argument, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Argument mapping untuk cedant {cedant_code} tidak valid.",
+            )
+        sheet_names = argument.get("sheet_names") or []
+        if isinstance(sheet_names, str):
+            sheet_names = [sheet_names]
+
+        if sheet_names and sheet_name:
+            if not any(str(sheet).lower() == sheet_name.lower() for sheet in sheet_names):
                 continue
 
-            # Cek sheet_names di argument
-            arg = r.get("argument") or {}
-            sheet_names = arg.get("sheet_names") or []
+        mapping[field_name] = excel_name
 
-            # Cocok jika: sheet_names kosong (berlaku semua sheet)
-            # atau sheet_name ada di list sheet_names
-            if sheet_names and sheet_name:
-                if not any(s.lower() == sheet_name.lower() for s in sheet_names):
-                    continue
+    return mapping
 
-            mapping[field_name] = excel_name
 
-        return mapping
-    except Exception as e:
-        logger.warning("_load_column_mapping failed for %s: %s", cedant_code, e)
-        return {}
+@router.get("/mappings", summary="Ambil mapping kolom aktif dari database")
+def get_column_mappings(db: Session = Depends(get_db)):
+    rows = db.execute(
+        text(
+            "SELECT m.cedant_code, "
+            "COALESCE(NULLIF(BTRIM(m.cedant_name), ''), c.cedant_name, m.cedant_code) AS cedant_name, "
+            "m.excel_name, f.field_name, m.argument "
+            "FROM master_upload_column_mapping m "
+            "JOIN master_field f ON f.id = m.field_id "
+            "LEFT JOIN master_oscedant_code c ON c.cedant_code = m.cedant_code "
+            "WHERE m.is_active = TRUE "
+            "ORDER BY cedant_name, m.cedant_code, f.field_name"
+        )
+    ).mappings().all()
+
+    profiles = {}
+    for row in rows:
+        field_name = re.sub(
+            r"[^a-z0-9]+", "_", (row.get("field_name") or "").strip().lower()
+        ).strip("_")
+        excel_name = (row.get("excel_name") or "").strip()
+        if not field_name or not excel_name:
+            continue
+
+        argument = row.get("argument") or {}
+        if isinstance(argument, str):
+            argument = json.loads(argument)
+        if not isinstance(argument, dict):
+            argument = {}
+        sheet_names = argument.get("sheet_names") or []
+        if isinstance(sheet_names, str):
+            sheet_names = [sheet_names]
+        sheet_names = [str(sheet).strip() for sheet in sheet_names if str(sheet).strip()]
+        cedant_code = row.get("cedant_code") or ""
+        cedant_name = row.get("cedant_name") or cedant_code or "—"
+        key = (cedant_code, cedant_name, tuple(sorted(sheet.lower() for sheet in sheet_names)))
+
+        if key not in profiles:
+            profiles[key] = {
+                "tipe_data": "OS Cedant",
+                "cedant": cedant_name,
+                "cedantCode": cedant_code,
+                "sheetMet": ", ".join(sheet_names) if sheet_names else "All sheets",
+                "lossRef": "—",
+                "outstanding": "—",
+                "dateOfLoss": "—",
+                "mapping": {},
+            }
+
+        profile = profiles[key]
+        profile["mapping"][field_name] = excel_name
+
+    result = []
+    for profile in profiles.values():
+        field_names = set(profile["mapping"])
+        is_infopack = bool(field_names & {"class_code", "classcode", "title", "value"})
+        profile["tipe_data"] = "Infopack" if is_infopack else "OS Cedant"
+        profile["lossRef"] = (
+            profile["mapping"].get("doc_no")
+            or profile["mapping"].get("title")
+            or "—"
+        )
+        profile["outstanding"] = (
+            profile["mapping"].get("outstanding")
+            or profile["mapping"].get("value")
+            or "—"
+        )
+        profile["dateOfLoss"] = profile["mapping"].get("dol", "—")
+        profile["status"] = (
+            "READY"
+            if (is_infopack and field_names & {"class_code", "classcode", "title"})
+            or (not is_infopack and "doc_no" in field_names)
+            else "INCOMPLETE"
+        )
+        result.append(profile)
+
+    return {"profiles": result}
 
 
 def _extract_cedant_row_with_mapping(
@@ -281,33 +362,116 @@ def _resolve_cedant_code(db: Session, cedant_name: str) -> Optional[str]:
     if not cedant_name:
         return None
     name = cedant_name.strip()
-    try:
-        # 1. Cari di master_upload_column_mapping
-        row = db.execute(
-            text("SELECT DISTINCT cedant_code FROM master_upload_column_mapping "
-                 "WHERE LOWER(cedant_name) = LOWER(:name) AND is_active = TRUE LIMIT 1"),
-            {"name": name},
-        ).first()
-        if row and row[0]:
-            return row[0]
-        # 2. Exact match di master_oscedant_code
-        row = db.execute(
-            text("SELECT cedant_code FROM master_oscedant_code "
-                 "WHERE LOWER(cedant_name) = LOWER(:name) LIMIT 1"),
-            {"name": name},
-        ).first()
-        if row:
-            return row[0]
-        # 3. Partial match
-        row = db.execute(
-            text("SELECT cedant_code FROM master_oscedant_code "
-                 "WHERE LOWER(cedant_name) LIKE LOWER(:pattern) LIMIT 1"),
-            {"pattern": f"%{name}%"},
-        ).first()
-        return row[0] if row else None
-    except Exception as e:
-        logger.debug("_resolve_cedant_code failed: %s", e)
-        return None
+    mapping_codes = db.execute(
+        text(
+            "SELECT DISTINCT cedant_code FROM master_upload_column_mapping "
+            "WHERE LOWER(BTRIM(cedant_name)) = LOWER(:name) "
+            "AND is_active = TRUE AND cedant_code IS NOT NULL"
+        ),
+        {"name": name},
+    ).scalars().all()
+    if len(mapping_codes) == 1:
+        return mapping_codes[0]
+
+    exact_codes = db.execute(
+        text(
+            "SELECT DISTINCT cedant_code FROM master_oscedant_code "
+            "WHERE LOWER(BTRIM(cedant_name)) = LOWER(:name) "
+            "AND cedant_code IS NOT NULL"
+        ),
+        {"name": name},
+    ).scalars().all()
+    if len(exact_codes) == 1:
+        return exact_codes[0]
+
+    partial_codes = db.execute(
+        text(
+            "SELECT DISTINCT cedant_code FROM master_oscedant_code "
+            "WHERE LOWER(cedant_name) LIKE LOWER(:pattern) AND cedant_code IS NOT NULL"
+        ),
+        {"pattern": f"%{name}%"},
+    ).scalars().all()
+    return partial_codes[0] if len(partial_codes) == 1 else None
+
+
+def _normalize_mapping_value(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
+
+
+def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
+    """Resolve a cedant from active mappings when upload form's cedant is blank."""
+    data = next((row.get("data") for row in rows if row.get("data")), {})
+    headers = {_normalize_mapping_value(str(header)) for header in data}
+    if not headers:
+        return None, None
+
+    mappings = db.execute(
+        text(
+            "SELECT m.cedant_code, m.cedant_name, m.excel_name, m.argument, f.field_name "
+            "FROM master_upload_column_mapping m "
+            "JOIN master_field f ON f.id = m.field_id "
+            "WHERE m.is_active = TRUE AND m.cedant_code IS NOT NULL"
+        )
+    ).mappings().all()
+
+    candidates = {}
+    for mapping in mappings:
+        field_name = re.sub(
+            r"[^a-z0-9]+", "_", (mapping.get("field_name") or "").strip().lower()
+        ).strip("_")
+        if field_name not in {"doc_no", "outstanding", "dol", "currency"}:
+            continue
+        excel_name = mapping.get("excel_name") or ""
+        if _normalize_mapping_value(excel_name) not in headers:
+            continue
+
+        argument = mapping.get("argument") or {}
+        if isinstance(argument, str):
+            argument = json.loads(argument)
+        if not isinstance(argument, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Argument mapping untuk cedant {mapping['cedant_code']} tidak valid.",
+            )
+        sheet_names = argument.get("sheet_names") or []
+        if isinstance(sheet_names, str):
+            sheet_names = [sheet_names]
+        if sheet_names and sheet_name and not any(
+            _normalize_mapping_value(str(name)) == _normalize_mapping_value(sheet_name)
+            for name in sheet_names
+        ):
+            continue
+
+        code = mapping["cedant_code"]
+        candidate = candidates.setdefault(
+            code, {"name": mapping.get("cedant_name"), "fields": set()}
+        )
+        candidate["fields"].add(field_name)
+
+    candidates = {
+        code: candidate
+        for code, candidate in candidates.items()
+        if "doc_no" in candidate["fields"]
+    }
+    if not candidates:
+        return None, None
+
+    best_score = max(len(candidate["fields"]) for candidate in candidates.values())
+    best = [
+        (code, candidate)
+        for code, candidate in candidates.items()
+        if len(candidate["fields"]) == best_score
+    ]
+    if len(best) != 1:
+        logger.warning(
+            "Cedant mapping is ambiguous for sheet=%s (%s candidates)",
+            sheet_name,
+            len(best),
+        )
+        return None, None
+
+    code, candidate = best[0]
+    return code, candidate["name"]
 
 
 def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
@@ -366,13 +530,27 @@ def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
     }
 
 
-def _extract_infopack_row(r, cedant_code, bulan, tahun, file_name, sheet_name, row_index):
+def _extract_infopack_row(
+    r, cedant_code, bulan, tahun, file_name, sheet_name, row_index, col_map=None
+):
     data = r.get("data", {})
-    class_code = _find(data, *CLASS_CODE_PATTERNS) or None
+    col_map = col_map or {}
+
+    def get_col(field, fallback_patterns):
+        excel_col = col_map.get(field)
+        if excel_col:
+            for key, value in data.items():
+                if key.lower() == excel_col.lower():
+                    mapped_value = str(value).strip() if value is not None else ""
+                    if mapped_value and mapped_value.lower() not in ("nan", "none", "-"):
+                        return mapped_value
+        return _find(data, *fallback_patterns)
+
+    class_code = get_col("class_code", CLASS_CODE_PATTERNS) or None
     if class_code and len(class_code) > 50:
         class_code = class_code[:50]
-    title = _find(data, *INSURED_PATTERNS) or None
-    value = _find(data, *VALUE_PATTERNS) or None
+    title = get_col("title", INSURED_PATTERNS) or None
+    value = get_col("value", VALUE_PATTERNS) or None
     return {
         "cedant_code": (cedant_code or "")[:50] or None,
         "class_code":  class_code,
@@ -471,7 +649,7 @@ async def upload_to_master(
 
     pk_col = (primary_key_col or "").strip() or None
     # Gunakan cedant_code dari frontend jika ada, fallback ke lookup DB
-    resolved_cedant = (cedant_code or "").strip() or _resolve_cedant_code(db, cedant or "") or (cedant or "")
+    resolved_cedant = (cedant_code or "").strip() or _resolve_cedant_code(db, cedant or "") or ""
     target_table = _target_table(tipe_data)
     is_infopack  = target_table == INFOPACK_TABLE
 
@@ -509,13 +687,28 @@ async def upload_to_master(
 
     sheet_val = result.get("sheet", "")
     job.sheet_name = sheet_val or job.sheet_name
+    if not resolved_cedant:
+        resolved_cedant, detected_cedant_name = _detect_cedant_from_mapping(
+            db, result["rows"], sheet_val
+        )
+        if resolved_cedant and not cedant:
+            job.cedant = detected_cedant_name
+        if not resolved_cedant:
+            logger.warning(
+                "Could not resolve cedant code from active mappings for file=%s sheet=%s",
+                file.filename,
+                sheet_val,
+            )
     db.commit()
 
     detected_name = _detect_file_name(file.filename)
 
     if is_infopack:
+        col_map = _load_column_mapping(db, resolved_cedant, sheet_val) if resolved_cedant else {}
         rows_to_write = [
-            _extract_infopack_row(r, resolved_cedant, bulan, tahun, detected_name, sheet_val, idx)
+            _extract_infopack_row(
+                r, resolved_cedant, bulan, tahun, detected_name, sheet_val, idx, col_map
+            )
             for idx, r in enumerate(result["rows"])
             if r.get("data")
         ]
@@ -549,6 +742,7 @@ async def upload_to_master(
 
     return {
         "job_id": job.id, "sheet": sheet_val, "target_table": target_table,
+        "cedant_code": resolved_cedant or None,
         "file_name": detected_name, "total_rows": result["total_rows"],
         "rows_appended": stats["inserted"], "rows_skipped": stats["skipped"],
         "message": f"Upload berhasil. {stats['inserted']} baris ditambahkan, {stats['skipped']} dilewati.",

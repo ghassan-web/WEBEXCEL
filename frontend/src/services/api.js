@@ -153,6 +153,14 @@ export function downloadReport(jobId) {
 
 // ─── Master endpoints ─────────────────────────────────────────────────────────
 
+/** GET /api/master/mappings */
+export async function getColumnMappings() {
+  const res = await fetch(`${BASE_URL}/api/master/mappings`, {
+    headers: sessionHeaders(),
+  });
+  return handleResponse(res);
+}
+
 /** POST /api/master/upload */
 export async function uploadToMaster(formData, onProgress) {
   return xhrUpload(`${BASE_URL}/api/master/upload`, formData, onProgress);

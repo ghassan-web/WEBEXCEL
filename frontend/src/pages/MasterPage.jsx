@@ -1,7 +1,7 @@
 // Master OS Claim Page — reads from master_data via /api/master/data
 import { useState, useEffect, useCallback } from "react";
 import { getMasterData, exportMasterCsv } from "../services/api";
-import { PROFILES_OS, PROFILES_INFOPACK } from "../services/mappingData";
+import { useColumnMappings } from "../hooks/useColumnMappings";
 import {
   TableCellsIcon,
   ArrowDownTrayIcon,
@@ -15,6 +15,7 @@ import {
 const PAGE_SIZE = 50;
 
 export default function MasterPage() {
+  const { profiles, error: mappingsError } = useColumnMappings();
   const [data,        setData]        = useState(null);   // { total, rows }
   const [page,        setPage]        = useState(0);
   const [search,      setSearch]      = useState("");
@@ -58,125 +59,32 @@ export default function MasterPage() {
 
   /* Extract display fields from the stored row_data JSON */
   function mapRow(r) {
-    const d    = r.row_data || {};
-    const keys = Object.keys(d);
-
-    // Helper: cari nilai dari kolom yang namanya cocok regex
-    const find = (re) => {
-      const k = keys.find(k => re.test(k));
-      if (!k) return "—";
-      const val = d[k];
-      return (val !== null && val !== undefined && String(val).trim() !== "") ? String(val) : "—";
-    };
+    const d = r.row_data || {};
 
     // ── Sheet — pakai sheet_name dari upload job, fallback ke row_data ──
-    const sheet = r.sheet_name || find(/^sheet$/i) || "—";
+    const sheet = r.sheet_name || d.sheet || "—";
 
     // ── Cedant — prioritas: field cedant dari DB → lookup via sheet ──────
     const cedant = (() => {
+      // Resolve the stored code to the name used by the active DB mapping.
+      const profilesForCedant = profiles.filter(p =>
+        p.cedantCode === r.cedant && p.tipe_data === tipeData
+      );
+      const sheetName = (r.sheet_name || "").toLowerCase();
+      const matchingProfile = profilesForCedant.find(p =>
+        p.sheetMet.toLowerCase().split(", ").some(sheet => sheet === sheetName)
+      ) || profilesForCedant[0];
+      if (matchingProfile?.cedant) return matchingProfile.cedant;
+
       // 1. Cedant tersimpan langsung di row (dikirim saat upload manual)
       if (r.cedant && r.cedant.trim()) return r.cedant.trim();
-
-      // 2. Cari dari kolom _cedant atau cedant di dalam row_data
-      const exactKey = keys.find(k => /^_?cedant$/i.test(k));
-      if (exactKey) {
-        const val = String(d[exactKey] ?? "").trim();
-        if (val && val !== r.tipe_data) return val;
-      }
-
-      // 3. Lookup dari PROFILES berdasarkan sheet_name
-      const profiles = tipeData === "Infopack" ? PROFILES_INFOPACK : PROFILES_OS;
-      const sheetToMatch = r.sheet_name || (find(/^sheet$/i) !== "—" ? find(/^sheet$/i) : null);
-      if (sheetToMatch) {
-        const match = profiles.find(p =>
-          p.sheetMet?.toLowerCase() === sheetToMatch.toLowerCase()
-        );
-        if (match?.cedant) return match.cedant;
-      }
-
-      // 4. Lookup dari primary_key_value — cocokkan lossRef di profiles
-      const pkVal = r.primary_key_value ?? "";
-      if (pkVal) {
-        const matchByPk = profiles.find(p =>
-          p.lossRef && pkVal.toLowerCase().startsWith(p.lossRef.toLowerCase().slice(0, 4))
-        );
-        if (matchByPk?.cedant) return matchByPk.cedant;
-      }
 
       return "—";
     })();
 
-    // ── Outstanding — per-cedant mapping dari MappingRules ──────────────
-    // Nama kolom bervariasi: "Orig Currency Amt", "Amount_Net_OS", "OUTSTANDING", dst.
-    const outstanding = (() => {
-      // Coba nama kolom yang umum dulu (exact)
-      for (const re of [
-        /^Orig Currency Amt$/,
-        /^Amount_Net_OS$/i,
-        /^outstanding$/i,
-        /^net_outstanding$/i,
-        /^OS$/,
-        /^os_amount$/i,
-        /^net_os$/i,
-        /^R\/I Share Amount$/i,
-        /^Remain OS/i,
-        /^Outstanding Claim$/i,
-        /^Sum of Outstanding$/i,
-        /^TOTAL AMOUNT TSAI$/i,
-        /^RENDO SHARE$/i,
-        /^NET BALANCE$/i,
-        /^NET_AMT$/i,
-        /^Saldo Akhir Tagih$/i,
-        /^AMOUNT$/i,
-      ]) {
-        const v = find(re);
-        if (v !== "—") return v;
-      }
-      // broad fallback
-      return find(/outstanding|net.*os|os.*amount|balance/i);
-    })();
-
-    // ── Date of Loss — nama kolom variatif, tampilkan apa adanya ────────
-    const dol = (() => {
-      for (const re of [
-        /^Trans Desc\/DOL$/i,
-        /^DOL$/i,
-        /^DOL \(Date of Loss\)$/i,
-        /^DATE OF LOSS$/i,
-        /^Date of Loss$/i,
-        /^date_of_loss$/i,
-        /^loss_date$/i,
-        /^Tgl\. DOL$/i,
-        /^DOCL$/i,
-        /^Loss Date$/i,
-        /^D\.O\.L$/i,
-        /^LossClaim$/i,
-        /^tg_kejadian$/i,
-      ]) {
-        const v = find(re);
-        if (v !== "—") return v;
-      }
-      return find(/date.*loss|loss.*date|\bdol\b/i);
-    })();
-
-    // ── Keterangan Loss Ref ───────────────────────────────────────────────
-    const ket = (() => {
-      for (const re of [
-        /^keterangan$/i,
-        /^ket$/i,
-        /^keterangan_loss_ref$/i,
-        /^ket_loss_ref$/i,
-        /^description$/i,
-        /^desc$/i,
-        /^remark$/i,
-        /^note$/i,
-        /^catatan$/i,
-      ]) {
-        const v = find(re);
-        if (v !== "—") return v;
-      }
-      return find(/keter|remark|note/i);
-    })();
+    const outstanding = d.outstanding ?? d.value ?? "—";
+    const dol = d.dol || "—";
+    const ket = d.keterangan || d.description || "—";
 
     return {
       cedant,
@@ -262,6 +170,11 @@ export default function MasterPage() {
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">{error}</div>
+        )}
+        {mappingsError && (
+          <div role="alert" className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl text-sm">
+            Mapping database gagal dimuat: {mappingsError}
+          </div>
         )}
 
         {/* ── Main card ── */}

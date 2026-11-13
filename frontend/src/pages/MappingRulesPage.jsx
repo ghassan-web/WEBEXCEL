@@ -1,5 +1,5 @@
-﻿import { useState, useCallback } from "react";
-import { PROFILES_OS, PROFILES_INFOPACK } from "../services/mappingData";
+import { useState } from "react";
+import { useColumnMappings } from "../hooks/useColumnMappings";
 import {
   AdjustmentsHorizontalIcon,
   MagnifyingGlassIcon,
@@ -22,28 +22,27 @@ function isBroker(name) { return name.toLowerCase().includes("broker"); }
 export default function MappingRulesPage() {
   const [activeTab, setActiveTab] = useState("os");
   const [search,    setSearch]    = useState("");
-  const [loading,   setLoading]   = useState(false);
-  const [refTab,    setRefTab]    = useState("Sheet1 (OS valid)");
+  const { profiles: allProfiles, loading, error, reload } = useColumnMappings();
 
-  const profiles = activeTab === "os" ? PROFILES_OS : PROFILES_INFOPACK;
+  const profiles = allProfiles.filter(p =>
+    p.tipe_data === (activeTab === "os" ? "OS Cedant" : "Infopack")
+  );
 
   const filtered = profiles.filter(p => {
     const q = search.toLowerCase();
     return !q
       || p.cedant.toLowerCase().includes(q)
+      || p.cedantCode.toLowerCase().includes(q)
       || p.sheetMet.toLowerCase().includes(q)
       || p.lossRef.toLowerCase().includes(q)
       || p.outstanding.toLowerCase().includes(q)
-      || p.col.toLowerCase().includes(q)
-      || (p.fields || []).some(f => f.toLowerCase().includes(q));
+      || p.dateOfLoss.toLowerCase().includes(q)
+      || Object.entries(p.mapping).some(([field, column]) =>
+        `${field} ${column}`.toLowerCase().includes(q)
+      );
   });
 
   const readyCount = profiles.filter(p => p.status === "READY").length;
-
-  const handleRefresh = useCallback(() => {
-    setLoading(true);
-    setTimeout(() => setLoading(false), 800);
-  }, []);
 
   return (
     <div className="flex-1 flex flex-col bg-gray-50 overflow-auto">
@@ -55,10 +54,10 @@ export default function MappingRulesPage() {
         </div>
         <div>
           <h1 className="text-base font-bold text-gray-800">Mapping Rules</h1>
-          <p className="text-xs text-gray-400">Profil pemetaan kolom per cedant &mdash; read only</p>
+          <p className="text-xs text-gray-400">Profil pemetaan kolom dari database &mdash; read only</p>
         </div>
         <button
-          onClick={handleRefresh}
+          onClick={reload}
           disabled={loading}
           className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
         >
@@ -96,39 +95,28 @@ export default function MappingRulesPage() {
                 Mapping Rules &mdash; {activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}
               </h2>
               <p className="text-xs text-gray-400 mt-1 max-w-xl">
-                Mapping dibaca langsung dari Google Sheets referensi. Satu kolom Cedant = satu profil format. Tidak ada perubahan pada sheet mapping.
+                Mapping aktif dibaca langsung dari tabel <code>master_upload_column_mapping</code>.
               </p>
             </div>
           </div>
         </div>
 
+        {error && (
+          <div role="alert" className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+            Mapping database gagal dimuat: {error}
+          </div>
+        )}
+
         {/* Info card */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4 flex flex-col gap-3">
           <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Mapping spreadsheet</span>
+            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Mapping database</span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <a
-              href="#"
-              className="text-xs text-teal-600 hover:underline font-mono break-all"
-              onClick={e => e.preventDefault()}
-            >
-              mapping_os_claim_cedant.xlsx
-            </a>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="text-xs text-gray-500">Reference tab</span>
-              <div className="relative">
-                <select
-                  value={refTab}
-                  onChange={e => setRefTab(e.target.value)}
-                  className="text-xs border border-gray-200 rounded-lg pl-3 pr-7 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none cursor-pointer"
-                >
-                  <option>Sheet1 (OS valid)</option>
-                  <option>Sheet2 (InfoPack)</option>
-                </select>
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">&#9660;</span>
-              </div>
-            </div>
+            <span className="text-xs text-teal-700 font-mono">master_upload_column_mapping</span>
+            <span className="ml-auto text-xs text-gray-500">
+              {loading ? "Memuat…" : `${allProfiles.length} profil aktif`}
+            </span>
           </div>
 
           {/* Legend */}
@@ -148,9 +136,9 @@ export default function MappingRulesPage() {
           <div className="bg-gray-50 rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-gray-500">
             <InformationCircleIcon className="h-4 w-4 text-gray-400 flex-shrink-0 mt-0.5" />
             <span>
-              <strong className="text-gray-700">Sheet number dideteksi:</strong>{" "}
-              MATCHED hanya bila ketiga header yang dikenali terdapat dalam satu baris header.
-              Nama sheet pada mapping digunakan sebagai penunjuk, bukan pembatas.
+              <strong className="text-gray-700">Aturan sheet:</strong>{" "}
+              Mapping diterapkan sesuai daftar sheet pada kolom <code>argument</code>.
+              Jika daftar sheet kosong, mapping berlaku untuk semua sheet.
             </span>
           </div>
         </div>
@@ -181,7 +169,7 @@ export default function MappingRulesPage() {
             <table className="min-w-full text-xs">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide w-10">Column</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant Code</th>
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide min-w-[160px]">Cedant</th>
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide min-w-[140px]">Sheet Met</th>
                   <th className="px-3 py-2.5 text-left font-semibold text-orange-500 uppercase tracking-wide min-w-[120px]">
@@ -193,28 +181,24 @@ export default function MappingRulesPage() {
                   <th className="px-3 py-2.5 text-left font-semibold text-blue-500 uppercase tracking-wide whitespace-nowrap">
                     <span className="inline-flex items-center gap-1"><CalendarIcon className="h-3 w-3" /> Date of Loss</span>
                   </th>
-                  {activeTab === "infopack" && (
-                    <th className="px-3 py-2.5 text-left font-semibold text-indigo-500 uppercase tracking-wide whitespace-nowrap">
-                      Prop / Non-Prop
-                    </th>
-                  )}
+                  <th className="px-3 py-2.5 text-left font-semibold text-indigo-500 uppercase tracking-wide">Mapped Fields</th>
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={activeTab === "infopack" ? 8 : 7} className="text-center py-12 text-gray-400">
-                      Tidak ada profil yang cocok dengan pencarian.
+                    <td colSpan={8} className="text-center py-12 text-gray-400">
+                      {loading ? "Memuat mapping database…" : "Tidak ada profil yang cocok dengan pencarian."}
                     </td>
                   </tr>
                 )}
                 {filtered.map((p, i) => (
-                  <tr key={i} className="hover:bg-teal-50/30 transition-colors">
+                  <tr key={`${p.cedantCode}-${p.sheetMet}-${i}`} className="hover:bg-teal-50/30 transition-colors">
                     {/* Column */}
                     <td className="px-3 py-1.5">
                       <span className="font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded text-[11px]">
-                        {p.col}
+                        {p.cedantCode || "—"}
                       </span>
                     </td>
                     {/* Cedant */}
@@ -237,25 +221,15 @@ export default function MappingRulesPage() {
                     <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">
                       {p.dateOfLoss}
                     </td>
-                    {/* Field - InfoPack only */}
-                    {activeTab === "infopack" && (
-                      <td className="px-3 py-1.5 whitespace-nowrap">
-                        <div className="flex flex-wrap gap-1 max-w-[160px]">
-                          {(p.fields || []).map((f, fi) => {
-                            const isNonProp = f.toLowerCase().includes("non");
-                            return (
-                              <span key={fi} className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                                isNonProp
-                                  ? "bg-indigo-100 text-indigo-700"
-                                  : "bg-teal-100 text-teal-700"
-                              }`}>
-                                {isNonProp ? "Non-Prop" : "Prop"}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </td>
-                    )}
+                    <td className="px-3 py-1.5">
+                      <div className="flex flex-wrap gap-1 max-w-[320px]">
+                        {Object.entries(p.mapping).map(([field, column]) => (
+                          <span key={field} className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
+                            {field} &rarr; {column}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
                     {/* Status */}
                     <td className="px-3 py-1.5">
                       {p.status === "READY" ? (
@@ -281,7 +255,7 @@ export default function MappingRulesPage() {
               <strong className="text-gray-600">{profiles.length}</strong> profil &middot;{" "}
               <span className="text-emerald-600 font-semibold">{readyCount} READY</span>
             </span>
-            <span className="text-xs text-gray-400">Reference mapping: read only &middot; local data</span>
+            <span className="text-xs text-gray-400">Source: database &middot; read only</span>
           </div>
         </div>
 

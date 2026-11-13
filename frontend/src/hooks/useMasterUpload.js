@@ -10,6 +10,7 @@ const INITIAL_FORM = {
   tipe_data:       "",
   primary_key_col: "",
   cedant:          "",
+  cedant_code:     "",
   sheet_name:      "",
 };
 
@@ -88,8 +89,9 @@ export function useMasterUpload() {
       if (form.cedant && form.primary_key_col.trim()) {
         fd.append("primary_key_col", form.primary_key_col.trim());
       }
-      if (form.cedant)     fd.append("cedant",     form.cedant);
-      if (form.sheet_name) fd.append("sheet_name", form.sheet_name);
+      if (form.cedant)      fd.append("cedant",      form.cedant);
+      if (form.cedant_code) fd.append("cedant_code", form.cedant_code);
+      if (form.sheet_name)  fd.append("sheet_name",  form.sheet_name);
       fd.append("file", file);
 
       const data = await uploadToMaster(fd, setUploadPct);

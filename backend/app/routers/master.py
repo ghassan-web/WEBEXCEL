@@ -151,32 +151,211 @@ def _detect_file_name(original: str) -> str:
     return re.split(r"[\\/]", original.strip())[-1]
 
 
+def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict:
+    """
+    Load column mapping dari master_upload_column_mapping.
+    Returns dict: { field_name: excel_column_name }
+    Misal: { "doc_no": "DocNo", "dol": "DOL", "outstanding": "Amount_Net_OS" }
+
+    Filtering:
+    - cedant_code harus cocok
+    - sheet_name harus ada di argument.sheet_names (atau sheet_names kosong = semua sheet)
+    - is_active = True
+    """
+    if not cedant_code:
+        return {}
+    try:
+        rows = db.execute(
+            text(
+                "SELECT m.excel_name, f.field_name, m.argument "
+                "FROM master_upload_column_mapping m "
+                "JOIN master_field f ON f.id = m.field_id "
+                "WHERE m.cedant_code = :cc AND m.is_active = TRUE"
+            ),
+            {"cc": cedant_code},
+        ).mappings().all()
+
+        mapping = {}
+        for r in rows:
+            excel_name = r.get("excel_name") or ""
+            field_name = r.get("field_name") or ""
+            if not excel_name or not field_name:
+                continue
+
+            # Cek sheet_names di argument
+            arg = r.get("argument") or {}
+            sheet_names = arg.get("sheet_names") or []
+
+            # Cocok jika: sheet_names kosong (berlaku semua sheet)
+            # atau sheet_name ada di list sheet_names
+            if sheet_names and sheet_name:
+                if not any(s.lower() == sheet_name.lower() for s in sheet_names):
+                    continue
+
+            mapping[field_name] = excel_name
+
+        return mapping
+    except Exception as e:
+        logger.warning("_load_column_mapping failed for %s: %s", cedant_code, e)
+        return {}
+
+
+def _extract_cedant_row_with_mapping(
+    r: dict,
+    cedant_code: str,
+    bulan: str,
+    tahun: str,
+    file_name: str,
+    sheet_name: str,
+    col_map: dict,
+) -> dict:
+    """
+    Versi _extract_cedant_row yang menggunakan column mapping dari DB.
+    col_map: { field_name: excel_column_name }
+    Misal: { "doc_no": "DocNo", "dol": "DOL", "outstanding": "Amount_Net_OS" }
+    """
+    data = r.get("data", {})
+
+    def get_col(field: str, fallback_patterns: tuple) -> str:
+        """Ambil nilai dari data menggunakan mapping atau fallback patterns."""
+        if field in col_map:
+            excel_col = col_map[field]
+            # Case-insensitive lookup
+            for k, v in data.items():
+                if k.lower() == excel_col.lower():
+                    val = str(v).strip() if v is not None else ""
+                    if val and val.lower() not in ("", "nan", "none", "-"):
+                        return val
+        # Fallback ke pattern matching
+        return _find(data, *fallback_patterns)
+
+    # doc_no
+    doc_no_raw = None
+    if "doc_no" in col_map:
+        excel_col = col_map["doc_no"]
+        for k, v in data.items():
+            if k.lower() == excel_col.lower():
+                val = str(v).strip() if v is not None else ""
+                if val and val.lower() not in ("", "nan", "none", "-"):
+                    doc_no_raw = val
+                    break
+    if not doc_no_raw:
+        # Fallback ke pk
+        pk_raw = str(r.get("pk") or "").strip()
+        if pk_raw and not _parse_dol(pk_raw):
+            doc_no_raw = pk_raw
+
+    # dol
+    raw_dol = get_col("dol", DOL_PATTERNS)
+    dol = _parse_dol(raw_dol) if raw_dol else None
+
+    # outstanding
+    raw_os = get_col("outstanding", OUTSTANDING_PATTERNS)
+    outstanding = _parse_number(raw_os) if raw_os else None
+
+    # currency
+    currency = get_col("currency", CURRENCY_PATTERNS) or None
+    if currency and len(currency) > 10:
+        currency = currency[:10]
+
+    return {
+        "cedant_code": (cedant_code or "")[:50] or None,
+        "doc_no":      (doc_no_raw or "")[:255] or None,
+        "dol":         dol,
+        "outstanding": outstanding,
+        "currency":    currency,
+        "month":       int(bulan) if bulan and str(bulan).isdigit() else None,
+        "year":        int(tahun) if tahun and str(tahun).isdigit() else None,
+        "file_name":   file_name or None,
+        "sheet_name":  sheet_name or None,
+    }
+
+
 def _resolve_cedant_code(db: Session, cedant_name: str) -> Optional[str]:
+    """
+    Look up cedant_code.
+    Priority:
+    1. master_upload_column_mapping.cedant_name (exact) — paling akurat
+    2. master_oscedant_code (exact → partial)
+    """
     if not cedant_name:
         return None
+    name = cedant_name.strip()
     try:
+        # 1. Cari di master_upload_column_mapping
         row = db.execute(
-            text("SELECT cedant_code FROM master_oscedant_code WHERE LOWER(cedant_name) = LOWER(:name) LIMIT 1"),
-            {"name": cedant_name.strip()},
+            text("SELECT DISTINCT cedant_code FROM master_upload_column_mapping "
+                 "WHERE LOWER(cedant_name) = LOWER(:name) AND is_active = TRUE LIMIT 1"),
+            {"name": name},
+        ).first()
+        if row and row[0]:
+            return row[0]
+        # 2. Exact match di master_oscedant_code
+        row = db.execute(
+            text("SELECT cedant_code FROM master_oscedant_code "
+                 "WHERE LOWER(cedant_name) = LOWER(:name) LIMIT 1"),
+            {"name": name},
+        ).first()
+        if row:
+            return row[0]
+        # 3. Partial match
+        row = db.execute(
+            text("SELECT cedant_code FROM master_oscedant_code "
+                 "WHERE LOWER(cedant_name) LIKE LOWER(:pattern) LIMIT 1"),
+            {"pattern": f"%{name}%"},
         ).first()
         return row[0] if row else None
-    except Exception:
+    except Exception as e:
+        logger.debug("_resolve_cedant_code failed: %s", e)
         return None
 
 
 def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
     data = r.get("data", {})
-    doc_no = r.get("pk") or _find(data, *DOC_NO_PATTERNS) or None
+
+    # doc_no: gunakan pk langsung (itu adalah loss ref / claim no dari kolom mapping)
+    pk_raw = str(r.get("pk") or "").strip()
+
+    # Cek apakah pk berbentuk pure tanggal (mis "2026-07-23 00:00:00" atau "23/07/2026")
+    # Jika iya, coba cari doc_no dari kolom lain di data
+    _is_date_pk = False
+    if pk_raw:
+        parsed = _parse_dol(pk_raw)
+        if parsed and re.match(r"^\d{4}-\d{2}-\d{2}|^\d{2}/\d{2}/\d{4}|^\d{2}-\d{2}-\d{4}", pk_raw):
+            _is_date_pk = True
+
+    if _is_date_pk:
+        # Cari dari kolom yang namanya mengandung "ref", "no", "claim" tapi BUKAN date/dol
+        doc_no = None
+        for k, v in data.items():
+            k_lower = k.lower()
+            if any(x in k_lower for x in ("ref", "claim", "doc", "invoice", "faktur", "no_berkas")):
+                if not any(x in k_lower for x in ("date", "dol", "loss", "tanggal", "tgl", "kejadian")):
+                    val = str(v).strip() if v is not None else ""
+                    if val and val.lower() not in ("", "nan", "none", "-"):
+                        # Pastikan tidak berbentuk tanggal
+                        if not _parse_dol(val) or not re.match(r"^\d{4}-\d{2}-\d{2}|^\d{2}/\d{2}/\d{4}", val):
+                            doc_no = val[:255]
+                            break
+    else:
+        doc_no = pk_raw[:255] if pk_raw else None
+
+    # dol: cari dari DOL patterns di data
     raw_dol = _find(data, *DOL_PATTERNS)
     dol = _parse_dol(raw_dol) if raw_dol else None
+
+    # outstanding
     raw_os = _find(data, *OUTSTANDING_PATTERNS)
     outstanding = _parse_number(raw_os) if raw_os else None
+
+    # currency
     currency = _find(data, *CURRENCY_PATTERNS) or None
     if currency and len(currency) > 10:
         currency = currency[:10]
+
     return {
         "cedant_code": (cedant_code or "")[:50] or None,
-        "doc_no":      (doc_no or "")[:255] or None,
+        "doc_no":      doc_no or None,
         "dol":         dol,
         "outstanding": outstanding,
         "currency":    currency,
@@ -210,7 +389,13 @@ def _extract_infopack_row(r, cedant_code, bulan, tahun, file_name, sheet_name, r
 def _write_cedant_rows(db: Session, rows: list) -> dict:
     if not rows:
         return {"inserted": 0, "skipped": 0, "updated": 0}
-    doc_nos = [r["doc_no"] for r in rows if r.get("doc_no")]
+
+    # Pisahkan rows yang punya doc_no (bisa di-dedup) vs yang tidak (selalu insert)
+    rows_with_key   = [r for r in rows if r.get("doc_no")]
+    rows_without_key = [r for r in rows if not r.get("doc_no")]
+
+    # Dedup hanya untuk rows yang punya doc_no
+    doc_nos = [r["doc_no"] for r in rows_with_key]
     existing: set = set()
     if doc_nos:
         for row in db.execute(
@@ -218,14 +403,19 @@ def _write_cedant_rows(db: Session, rows: list) -> dict:
             {"dns": doc_nos},
         ):
             existing.add((row[0] or "", row[1] or ""))
+
     to_insert, skipped = [], 0
-    for r in rows:
+    for r in rows_with_key:
         key = (r.get("cedant_code") or "", r.get("doc_no") or "")
         if key in existing:
             skipped += 1
         else:
             existing.add(key)
             to_insert.append(r)
+
+    # Rows tanpa doc_no selalu diinsert (tidak ada dedup)
+    to_insert.extend(rows_without_key)
+
     BATCH = 1000
     for i in range(0, len(to_insert), BATCH):
         db.execute(
@@ -266,6 +456,7 @@ async def upload_to_master(
     tipe_data:       str           = Form(...),
     primary_key_col: Optional[str] = Form(None),
     cedant:          Optional[str] = Form(None),
+    cedant_code:     Optional[str] = Form(None),
     sheet_name:      Optional[str] = Form(None),
     file:            UploadFile    = File(...),
     db:              Session       = Depends(get_db),
@@ -279,7 +470,8 @@ async def upload_to_master(
         raise HTTPException(status_code=413, detail="File melebihi batas 50 MB")
 
     pk_col = (primary_key_col or "").strip() or None
-    resolved_cedant = _resolve_cedant_code(db, cedant or "") or (cedant or "")
+    # Gunakan cedant_code dari frontend jika ada, fallback ke lookup DB
+    resolved_cedant = (cedant_code or "").strip() or _resolve_cedant_code(db, cedant or "") or (cedant or "")
     target_table = _target_table(tipe_data)
     is_infopack  = target_table == INFOPACK_TABLE
 
@@ -331,11 +523,22 @@ async def upload_to_master(
                          if row.get("class_code") or row.get("title") or row.get("value")]
         stats = _write_infopack_rows(db, rows_to_write)
     else:
-        rows_to_write = [
-            _extract_cedant_row(r, resolved_cedant, bulan, tahun, detected_name, sheet_val)
-            for r in result["rows"]
-        ]
-        rows_to_write = [row for row in rows_to_write if row.get("doc_no")]
+        # Load column mapping dari DB jika ada cedant_code
+        col_map = _load_column_mapping(db, resolved_cedant, sheet_val) if resolved_cedant else {}
+
+        if col_map:
+            logger.info("Using DB column mapping for %s sheet=%s: %s", resolved_cedant, sheet_val, col_map)
+            rows_to_write = [
+                _extract_cedant_row_with_mapping(r, resolved_cedant, bulan, tahun, detected_name, sheet_val, col_map)
+                for r in result["rows"]
+            ]
+        else:
+            # Fallback ke pattern matching
+            rows_to_write = [
+                _extract_cedant_row(r, resolved_cedant, bulan, tahun, detected_name, sheet_val)
+                for r in result["rows"]
+            ]
+
         stats = _write_cedant_rows(db, rows_to_write)
 
     job.status = "done"

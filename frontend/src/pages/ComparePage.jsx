@@ -177,13 +177,15 @@ export default function ComparePage({ onNavigate }) {
     updateForm("sheet_name", "");
     if (!val) {
       updateForm("primary_key_col", "");
+      updateForm("cedant_code", "");
       return;
     }
     const profiles = allProfiles.filter(p => p.cedant === val);
     const pk = (profiles[0]?.lossRef && profiles[0].lossRef !== "—")
       ? profiles[0].lossRef : "";
     updateForm("primary_key_col", pk);
-    // Auto-set sheet dari profil pertama jika tersedia
+    // Auto-set cedant_code dari profile
+    updateForm("cedant_code", profiles[0]?.cedantCode || "");
     if (profiles[0]?.sheetMet) {
       updateForm("sheet_name", profiles[0].sheetMet);
     }
@@ -196,6 +198,7 @@ export default function ComparePage({ onNavigate }) {
     if (!p) return;
     if (p.lossRef && p.lossRef !== "—") updateForm("primary_key_col", p.lossRef);
     if (p.sheetMet) updateForm("sheet_name", p.sheetMet);
+    updateForm("cedant_code", p.cedantCode || "");
   };
 
   const handleCompositePartChange = (part, value) => {
@@ -212,6 +215,10 @@ export default function ComparePage({ onNavigate }) {
    */
   const handleFilePick = (f) => {
     const preferred = currentProfile?.sheetMet ?? null;
+    // Pastikan cedant_code dari profile aktif sudah di-set ke form
+    if (currentProfile?.cedantCode && !form.cedant_code) {
+      updateForm("cedant_code", currentProfile.cedantCode);
+    }
     handleFileChange(f, preferred);
   };
 

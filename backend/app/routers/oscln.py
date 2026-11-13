@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     get_db, get_session_id,
-    MasterData, ComparisonJob, ComparisonResult,
+    MasterOsCedant, MasterOsInfopack,
+    ComparisonJob, ComparisonResult,
     OsclnSnapshot, OsclnRow,
 )
 from ..services.excel_service import ingest_csv
@@ -128,17 +129,23 @@ def run_reconciliation(
 
     pk = primary_key_col.strip()
 
-    # ── Load Master rows — scoped to this session ──
-    q = (
-        db.query(MasterData)
-          .filter(MasterData.tipe_data == tipe_data,
-                  MasterData.session_id == session_id)
-    )
-    if cedant:
-        q = q.filter(MasterData.cedant == cedant)
-    master_rows = q.all()
+    # ── Load Master rows dari tabel kolumnar ──────────────────────────
+    from ..routers.master import _target_table as _tt
+    master_table = _tt(tipe_data)
+    is_infopack  = "infopack" in master_table
 
-    if not master_rows:
+    where  = ["1=1"]
+    params: dict = {}
+    if cedant:
+        where.append("cedant_code = :cedant")
+        params["cedant"] = cedant
+
+    master_raw = db.execute(
+        text(f"SELECT * FROM {master_table} WHERE {' AND '.join(where)}"),
+        params,
+    ).mappings().all()
+
+    if not master_raw:
         raise HTTPException(
             status_code=422,
             detail=f"Tidak ada data Master untuk tipe_data='{tipe_data}'" +
@@ -146,16 +153,33 @@ def run_reconciliation(
         )
 
     master_records = []
-    for r in master_rows:
-        try:
-            data = json.loads(r.row_data) if r.row_data else {}
-        except Exception:
-            data = {}
+    for r in master_raw:
+        dol_val = r.get("dol")
+        dol_str = dol_val.strftime("%Y-%m-%d") if dol_val else ""
+
+        if is_infopack:
+            pk_val = r.get("title") or str(r.get("id"))
+            data   = {
+                "cedant_code": r.get("cedant_code"), "class_code": r.get("class_code"),
+                "title": r.get("title"), "value": r.get("value"),
+                "month": r.get("month"), "year": r.get("year"),
+                "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
+                "cedant": r.get("cedant_code"),
+            }
+        else:
+            pk_val = r.get("doc_no") or str(r.get("id"))
+            data   = {
+                "doc_no": r.get("doc_no"), "dol": dol_str,
+                "outstanding": str(r.get("outstanding") or ""), "currency": r.get("currency"),
+                "month": r.get("month"), "year": r.get("year"),
+                "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
+                "cedant": r.get("cedant_code"),
+            }
+
         if pk not in data:
-            data[pk] = r.primary_key_value
-        if r.cedant and not any(k.lower() == "cedant" for k in data):
-            data["cedant"] = r.cedant
-        master_records.append((r.primary_key_value, data))
+            data[pk] = pk_val
+
+        master_records.append((str(pk_val).strip(), data))
 
     # ── Load OSCLN rows ──
     oscln_rows = (

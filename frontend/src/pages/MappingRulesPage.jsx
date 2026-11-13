@@ -182,20 +182,20 @@ export default function MappingRulesPage() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide w-10">Column</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Sheet Met</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-orange-500 uppercase tracking-wide">
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide min-w-[160px]">Cedant</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide min-w-[140px]">Sheet Met</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-orange-500 uppercase tracking-wide min-w-[120px]">
                     <span className="inline-flex items-center gap-1"><TagIcon className="h-3 w-3" /> Loss Ref</span>
                   </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-purple-500 uppercase tracking-wide">
+                  <th className="px-3 py-2.5 text-left font-semibold text-purple-500 uppercase tracking-wide min-w-[140px]">
                     <span className="inline-flex items-center gap-1"><CurrencyDollarIcon className="h-3 w-3" /> Outstanding</span>
                   </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-blue-500 uppercase tracking-wide">
+                  <th className="px-3 py-2.5 text-left font-semibold text-blue-500 uppercase tracking-wide whitespace-nowrap">
                     <span className="inline-flex items-center gap-1"><CalendarIcon className="h-3 w-3" /> Date of Loss</span>
                   </th>
                   {activeTab === "infopack" && (
-                    <th className="px-3 py-2.5 text-left font-semibold text-indigo-500 uppercase tracking-wide">
-                      Field
+                    <th className="px-3 py-2.5 text-left font-semibold text-indigo-500 uppercase tracking-wide whitespace-nowrap">
+                      Prop / Non-Prop
                     </th>
                   )}
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Status</th>
@@ -239,11 +239,20 @@ export default function MappingRulesPage() {
                     </td>
                     {/* Field - InfoPack only */}
                     {activeTab === "infopack" && (
-                      <td className="px-3 py-1.5">
-                        <div className="flex flex-col gap-0.5">
-                          {(p.fields || []).map((f, fi) => (
-                            <span key={fi} className="text-xs text-gray-500">{f}</span>
-                          ))}
+                      <td className="px-3 py-1.5 whitespace-nowrap">
+                        <div className="flex flex-wrap gap-1 max-w-[160px]">
+                          {(p.fields || []).map((f, fi) => {
+                            const isNonProp = f.toLowerCase().includes("non");
+                            return (
+                              <span key={fi} className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                                isNonProp
+                                  ? "bg-indigo-100 text-indigo-700"
+                                  : "bg-teal-100 text-teal-700"
+                              }`}>
+                                {isNonProp ? "Non-Prop" : "Prop"}
+                              </span>
+                            );
+                          })}
                         </div>
                       </td>
                     )}

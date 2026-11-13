@@ -6,16 +6,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Bisa pakai DATABASE_URL langsung, atau variabel terpisah gaya Laravel
+# Bisa pakai DATABASE_URL langsung, atau variabel terpisah
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    host     = os.getenv("DB_HOST",     "127.0.0.1")
-    port     = os.getenv("DB_PORT",     "3308")
-    database = os.getenv("DB_DATABASE", "excel_compare")
-    username = os.getenv("DB_USERNAME", "root")
+    host     = os.getenv("DB_HOST",     "10.10.125.91")
+    port     = os.getenv("DB_PORT",     "5432")
+    database = os.getenv("DB_DATABASE", "fsi_db")
+    username = os.getenv("DB_USERNAME", "viy4user")
     password = os.getenv("DB_PASSWORD", "")
-    DATABASE_URL = f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
+    DATABASE_URL = f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}"
 
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

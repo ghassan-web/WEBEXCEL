@@ -244,6 +244,7 @@ def get_column_mappings(db: Session = Depends(get_db)):
                 "tipe_data": "OS Cedant",
                 "cedant": cedant_name,
                 "cedantCode": cedant_code,
+                "sheetNames": sheet_names,
                 "sheetMet": ", ".join(sheet_names) if sheet_names else "All sheets",
                 "lossRef": "—",
                 "outstanding": "—",

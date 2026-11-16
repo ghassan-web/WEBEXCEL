@@ -30,11 +30,12 @@ export function useMasterUpload() {
   /**
    * handleFileChange
    * @param {File|null} f
-   * @param {string|null} preferredSheet - sheet dari currentProfile.sheetMet
+   * @param {string|string[]|null} preferredSheets - sheet names from the active mapping profile
    */
-  const handleFileChange = useCallback(async (f, preferredSheet = null) => {
+  const handleFileChange = useCallback(async (f, preferredSheets = null) => {
     setFile(f);
     setSheets([]);
+    setError(null);
     setForm(prev => ({ ...prev, sheet_name: "" }));
 
     if (!f) return;
@@ -44,17 +45,21 @@ export function useMasterUpload() {
       const sheetList = data.sheets || [];
       setSheets(sheetList);
 
-      let resolved = "";
-      if (preferredSheet && sheetList.includes(preferredSheet)) {
-        resolved = preferredSheet;
-      } else if (sheetList.length === 1) {
-        resolved = sheetList[0];
-      }
+      const candidates = Array.isArray(preferredSheets)
+        ? preferredSheets
+        : preferredSheets ? [preferredSheets] : [];
+      const resolved = candidates
+        .map(preferred => sheetList.find(sheet =>
+          sheet.trim().toLowerCase() === preferred.trim().toLowerCase()
+        ))
+        .find(Boolean) || (sheetList.length === 1 ? sheetList[0] : "");
 
       if (resolved) {
         setForm(prev => ({ ...prev, sheet_name: resolved }));
       }
-    } catch (_) {}
+    } catch (e) {
+      setError(e.message || "Gagal membaca daftar sheet dari file.");
+    }
   }, []);
 
   const reset = useCallback(() => {

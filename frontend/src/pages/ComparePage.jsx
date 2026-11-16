@@ -161,6 +161,25 @@ export default function ComparePage({ onNavigate }) {
   const activeProfiles = allProfiles.filter(p => p.cedant === form.cedant);
   const currentProfile = activeProfiles[selectedProfileIdx] ?? activeProfiles[0] ?? null;
   const isComposite    = currentProfile?.lossRef?.includes("|") ?? false;
+  const getProfileSheetNames = profile => {
+    if (Array.isArray(profile?.sheetNames)) return profile.sheetNames;
+    if (!profile?.sheetMet || profile.sheetMet === "All sheets") return [];
+    return profile.sheetMet.split(",").map(sheet => sheet.trim()).filter(Boolean);
+  };
+  const resolveMappedSheet = (profile, availableSheets) => {
+    for (const expected of getProfileSheetNames(profile)) {
+      const match = availableSheets.find(sheet =>
+        sheet.trim().toLowerCase() === expected.trim().toLowerCase()
+      );
+      if (match) return match;
+    }
+    return "";
+  };
+  const availableMappedSheets = getProfileSheetNames(currentProfile)
+    .map(expected => sheets.find(sheet =>
+      sheet.trim().toLowerCase() === expected.trim().toLowerCase()
+    ))
+    .filter(Boolean);
 
   /* ── handlers ── */
   const handleTabChange = (tab) => {
@@ -187,9 +206,7 @@ export default function ComparePage({ onNavigate }) {
     updateForm("primary_key_col", pk);
     // Auto-set cedant_code dari profile
     updateForm("cedant_code", profiles[0]?.cedantCode || "");
-    if (profiles[0]?.sheetMet) {
-      updateForm("sheet_name", profiles[0].sheetMet);
-    }
+    updateForm("sheet_name", resolveMappedSheet(profiles[0], sheets));
   };
 
   const handleProfileChange = (idx) => {
@@ -198,7 +215,7 @@ export default function ComparePage({ onNavigate }) {
     const p = activeProfiles[i];
     if (!p) return;
     if (p.lossRef && p.lossRef !== "—") updateForm("primary_key_col", p.lossRef);
-    if (p.sheetMet) updateForm("sheet_name", p.sheetMet);
+    updateForm("sheet_name", resolveMappedSheet(p, sheets));
     updateForm("cedant_code", p.cedantCode || "");
   };
 
@@ -211,11 +228,11 @@ export default function ComparePage({ onNavigate }) {
   };
 
   /**
-   * handleFilePick — pass preferredSheet dari mapping ke hook
+   * handleFilePick — pass mapped sheet names ke hook
    * agar sheet di-auto-resolve sebelum user klik Upload.
    */
   const handleFilePick = (f) => {
-    const preferred = currentProfile?.sheetMet ?? null;
+    const preferred = getProfileSheetNames(currentProfile);
     // Pastikan cedant_code dari profile aktif sudah di-set ke form
     if (currentProfile?.cedantCode && !form.cedant_code) {
       updateForm("cedant_code", currentProfile.cedantCode);
@@ -415,11 +432,17 @@ export default function ComparePage({ onNavigate }) {
                 </select>
                 <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]">&#9660;</span>
               </div>
-              {form.cedant && currentProfile && sheets.includes(currentProfile.sheetMet) && form.sheet_name !== currentProfile.sheetMet && (
-                <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
-                  <InformationCircleIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                  Mapping menyarankan sheet <strong className="font-mono">{currentProfile.sheetMet}</strong>
-                </p>
+              {form.cedant && currentProfile && sheets.length > 0 && getProfileSheetNames(currentProfile).length > 0 && (
+                availableMappedSheets.length === 0 ? (
+                  <p role="alert" className="text-xs text-amber-600 mt-1">
+                    Tidak ada sheet di file yang cocok dengan mapping database untuk profil ini.
+                  </p>
+                ) : !availableMappedSheets.includes(form.sheet_name) && (
+                  <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                    <InformationCircleIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                    Mapping database tersedia untuk sheet: <strong className="font-mono">{availableMappedSheets.join(", ")}</strong>
+                  </p>
+                )
               )}
             </div>
           )}

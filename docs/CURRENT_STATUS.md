@@ -1,6 +1,6 @@
 # Kondisi dan Progress OS Claim Hub
 
-**Diperbarui:** 17 November 2026  
+**Diperbarui:** 
 **Dasar dokumentasi:** pemeriksaan source code di repository. Status ini menjelaskan implementasi yang terlihat di kode, bukan bukti bahwa aplikasi sudah berjalan atau dirilis di lingkungan tertentu.
 
 ## Ringkasan
@@ -17,7 +17,7 @@ Secara implementasi, alur-alur inti tersebut telah memiliki UI dan endpoint back
 - Membaca sheet yang dipilih, mendukung deteksi header, dan memproses variasi struktur file.
 - Memetakan nilai ke tabel Master OS Cedant atau Infopack dengan mapping dari database bila tersedia, dan pola fallback untuk data Cedant.
 - Menghapus duplikat berdasarkan Primary Key yang dipilih di dalam file (kemunculan pertama dipertahankan).
-- Untuk OS Cedant, penyimpanan melewati kombinasi `cedant_code` + `doc_no` yang sudah ada; baris tanpa `doc_no` selalu ditambahkan. Untuk Infopack, jalur penyimpanan meng-append baris dan tidak melakukan pemeriksaan duplikat lintas upload.
+- Untuk OS Cedant, penyimpanan melewati kombinasi `cedant_code` + `doc_no` yang sudah ada; saat upload ulang, nilai DOL, outstanding, dan currency yang masih kosong dapat dilengkapi dari mapping tanpa menimpa nilai yang sudah ada. Baris tanpa `doc_no` tetap disimpan jika memiliki data mapped, sementara baris yang seluruh field mapped-nya kosong dilewati dan tidak ditampilkan di Master. Untuk Infopack, jalur penyimpanan meng-append baris dan tidak melakukan pemeriksaan duplikat lintas upload.
 - Menyimpan status dan ringkasan upload ke `upload_jobs`.
 - Menyediakan endpoint untuk membaca data Master, melihat riwayat upload/library, menghapus entry library, dan mengekspor data.
 - Ada jalur khusus KB INS yang menggunakan sheet `2.11` dan memerlukan `EXCEL_PASSWORD` bila workbook terenkripsi.

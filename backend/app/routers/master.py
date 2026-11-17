@@ -151,6 +151,28 @@ def _detect_file_name(original: str) -> str:
     return re.split(r"[\\/]", original.strip())[-1]
 
 
+def _normalize_field_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+
+
+def _canonical_field_name(value: str) -> str:
+    normalized = _normalize_field_name(value)
+    return {
+        "claim_no": "doc_no",
+        "claim_number": "doc_no",
+        "loss_ref": "doc_no",
+        "loss_reference": "doc_no",
+        "date_of_loss": "dol",
+        "loss_date": "dol",
+        "net_outstanding": "outstanding",
+        "currency_code": "currency",
+    }.get(normalized, normalized)
+
+
+def _normalize_mapping_value(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
+
+
 def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict:
     """
     Load column mapping dari master_upload_column_mapping.
@@ -177,7 +199,7 @@ def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict
     mapping = {}
     for row in rows:
         excel_name = row.get("excel_name") or ""
-        field_name = row.get("field_name") or ""
+        field_name = _canonical_field_name(row.get("field_name") or "")
         if not excel_name or not field_name:
             continue
 
@@ -194,7 +216,10 @@ def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict
             sheet_names = [sheet_names]
 
         if sheet_names and sheet_name:
-            if not any(str(sheet).lower() == sheet_name.lower() for sheet in sheet_names):
+            if not any(
+                _normalize_mapping_value(str(sheet)) == _normalize_mapping_value(sheet_name)
+                for sheet in sheet_names
+            ):
                 continue
 
         mapping[field_name] = excel_name
@@ -219,9 +244,7 @@ def get_column_mappings(db: Session = Depends(get_db)):
 
     profiles = {}
     for row in rows:
-        field_name = re.sub(
-            r"[^a-z0-9]+", "_", (row.get("field_name") or "").strip().lower()
-        ).strip("_")
+        field_name = _canonical_field_name(row.get("field_name") or "")
         excel_name = (row.get("excel_name") or "").strip()
         if not field_name or not excel_name:
             continue
@@ -298,29 +321,29 @@ def _extract_cedant_row_with_mapping(
     """
     data = r.get("data", {})
 
+    normalized_columns = {
+        _normalize_mapping_value(str(column)): column for column in data
+    }
+
+    def mapped_value(field: str) -> str:
+        excel_col = col_map.get(field)
+        if not excel_col:
+            return ""
+        column = normalized_columns.get(_normalize_mapping_value(excel_col))
+        value = data.get(column) if column is not None else None
+        result = str(value).strip() if value is not None else ""
+        return result if result.lower() not in ("", "nan", "none", "-") else ""
+
     def get_col(field: str, fallback_patterns: tuple) -> str:
         """Ambil nilai dari data menggunakan mapping atau fallback patterns."""
-        if field in col_map:
-            excel_col = col_map[field]
-            # Case-insensitive lookup
-            for k, v in data.items():
-                if k.lower() == excel_col.lower():
-                    val = str(v).strip() if v is not None else ""
-                    if val and val.lower() not in ("", "nan", "none", "-"):
-                        return val
+        value = mapped_value(field)
+        if value:
+            return value
         # Fallback ke pattern matching
         return _find(data, *fallback_patterns)
 
     # doc_no
-    doc_no_raw = None
-    if "doc_no" in col_map:
-        excel_col = col_map["doc_no"]
-        for k, v in data.items():
-            if k.lower() == excel_col.lower():
-                val = str(v).strip() if v is not None else ""
-                if val and val.lower() not in ("", "nan", "none", "-"):
-                    doc_no_raw = val
-                    break
+    doc_no_raw = mapped_value("doc_no") or None
     if not doc_no_raw:
         # Fallback ke pk
         pk_raw = str(r.get("pk") or "").strip()
@@ -395,10 +418,6 @@ def _resolve_cedant_code(db: Session, cedant_name: str) -> Optional[str]:
     return partial_codes[0] if len(partial_codes) == 1 else None
 
 
-def _normalize_mapping_value(value: str) -> str:
-    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
-
-
 def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
     """Resolve a cedant from active mappings when upload form's cedant is blank."""
     data = next((row.get("data") for row in rows if row.get("data")), {})
@@ -417,9 +436,7 @@ def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
 
     candidates = {}
     for mapping in mappings:
-        field_name = re.sub(
-            r"[^a-z0-9]+", "_", (mapping.get("field_name") or "").strip().lower()
-        ).strip("_")
+        field_name = _canonical_field_name(mapping.get("field_name") or "")
         if field_name not in {"doc_no", "outstanding", "dol", "currency"}:
             continue
         excel_name = mapping.get("excel_name") or ""
@@ -569,27 +586,70 @@ def _write_cedant_rows(db: Session, rows: list) -> dict:
     if not rows:
         return {"inserted": 0, "skipped": 0, "updated": 0}
 
+    rows_with_data = [
+        row for row in rows
+        if any(row.get(field) not in (None, "") for field in ("doc_no", "dol", "outstanding", "currency"))
+    ]
+    empty_rows_skipped = len(rows) - len(rows_with_data)
+    rows = rows_with_data
+    if not rows:
+        return {"inserted": 0, "skipped": empty_rows_skipped, "updated": 0}
+
     # Pisahkan rows yang punya doc_no (bisa di-dedup) vs yang tidak (selalu insert)
     rows_with_key   = [r for r in rows if r.get("doc_no")]
     rows_without_key = [r for r in rows if not r.get("doc_no")]
 
     # Dedup hanya untuk rows yang punya doc_no
     doc_nos = [r["doc_no"] for r in rows_with_key]
-    existing: set = set()
+    existing: dict = {}
     if doc_nos:
         for row in db.execute(
-            text("SELECT cedant_code, doc_no FROM master_os_cedant_web WHERE doc_no = ANY(:dns)"),
+            text(
+                "SELECT cedant_code, doc_no, dol, outstanding, currency "
+                "FROM master_os_cedant_web WHERE doc_no = ANY(:dns)"
+            ),
             {"dns": doc_nos},
         ):
-            existing.add((row[0] or "", row[1] or ""))
+            key = (row[0] or "", row[1] or "")
+            existing.setdefault(key, []).append({
+                "dol": row[2],
+                "outstanding": row[3],
+                "currency": row[4],
+            })
 
-    to_insert, skipped = [], 0
+    to_insert, to_update, skipped = [], [], empty_rows_skipped
+    seen = set()
     for r in rows_with_key:
         key = (r.get("cedant_code") or "", r.get("doc_no") or "")
-        if key in existing:
+        if key in seen:
             skipped += 1
+            continue
+        seen.add(key)
+
+        existing_rows = existing.get(key)
+        if existing_rows:
+            missing_values = {
+                field: r.get(field)
+                for field in ("dol", "outstanding", "currency")
+                if r.get(field) is not None
+                and any(
+                    current.get(field) is None
+                    or (field == "currency" and not str(current.get(field)).strip())
+                    for current in existing_rows
+                )
+            }
+            if missing_values:
+                to_update.append({
+                    "cedant_code": r.get("cedant_code"),
+                    "doc_no": r.get("doc_no"),
+                    **{
+                        field: r.get(field)
+                        for field in ("dol", "outstanding", "currency")
+                    },
+                })
+            else:
+                skipped += 1
         else:
-            existing.add(key)
             to_insert.append(r)
 
     # Rows tanpa doc_no selalu diinsert (tidak ada dedup)
@@ -604,7 +664,24 @@ def _write_cedant_rows(db: Session, rows: list) -> dict:
             to_insert[i:i + BATCH],
         )
         db.commit()
-    return {"inserted": len(to_insert), "skipped": skipped, "updated": 0}
+    for i in range(0, len(to_update), BATCH):
+        db.execute(
+            text(
+                "UPDATE master_os_cedant_web AS target SET "
+                "dol = COALESCE(target.dol, :dol), "
+                "outstanding = COALESCE(target.outstanding, :outstanding), "
+                "currency = COALESCE(NULLIF(BTRIM(target.currency), ''), :currency) "
+                "WHERE target.cedant_code IS NOT DISTINCT FROM :cedant_code "
+                "AND target.doc_no = :doc_no"
+            ),
+            to_update[i:i + BATCH],
+        )
+        db.commit()
+    return {
+        "inserted": len(to_insert),
+        "skipped": skipped,
+        "updated": len(to_update),
+    }
 
 
 def _write_infopack_rows(db: Session, rows: list) -> dict:
@@ -746,7 +823,11 @@ async def upload_to_master(
         "cedant_code": resolved_cedant or None,
         "file_name": detected_name, "total_rows": result["total_rows"],
         "rows_appended": stats["inserted"], "rows_skipped": stats["skipped"],
-        "message": f"Upload berhasil. {stats['inserted']} baris ditambahkan, {stats['skipped']} dilewati.",
+        "rows_updated": stats["updated"],
+        "message": (
+            f"Upload berhasil. {stats['inserted']} baris ditambahkan, "
+            f"{stats['updated']} baris dilengkapi, {stats['skipped']} dilewati."
+        ),
     }
 
 
@@ -770,6 +851,11 @@ def get_master_data(
     if cedant:
         where.append("cedant_code = :cedant")
         params["cedant"] = cedant
+    if not is_infopack:
+        where.append(
+            "(NULLIF(BTRIM(doc_no), '') IS NOT NULL OR dol IS NOT NULL "
+            "OR outstanding IS NOT NULL OR NULLIF(BTRIM(currency), '') IS NOT NULL)"
+        )
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     total = db.execute(text(f"SELECT COUNT(*) FROM {table}{where_sql}"), params).scalar() or 0
@@ -799,15 +885,18 @@ def get_master_data(
                 "created_at": None,
             })
         else:
+            doc_no = r.get("doc_no")
+            outstanding = r.get("outstanding")
             result_rows.append({
                 "id": r.get("id"), "tipe_data": "OS Cedant",
                 "bulan": str(r.get("month") or ""), "tahun": str(r.get("year") or ""),
                 "cedant": r.get("cedant_code"),
-                "primary_key_value": r.get("doc_no") or str(r.get("id")),
+                "primary_key_value": doc_no,
                 "source_job_id": None, "sheet_name": r.get("sheet_name"),
                 "row_data": {
-                    "doc_no": r.get("doc_no"), "dol": dol_str,
-                    "outstanding": str(r.get("outstanding") or ""), "currency": r.get("currency"),
+                    "doc_no": doc_no, "dol": dol_str,
+                    "outstanding": str(outstanding) if outstanding is not None else "",
+                    "currency": r.get("currency"),
                     "month": r.get("month"), "year": r.get("year"),
                     "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
                     "_cedant": r.get("cedant_code"),

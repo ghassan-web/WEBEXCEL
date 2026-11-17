@@ -494,6 +494,7 @@ export default function ComparePage({ onNavigate }) {
                 <p className="font-bold text-sm text-teal-800">Upload berhasil!</p>
                 <p className="mt-1 text-teal-700 leading-relaxed">
                   <strong>{result.rows_appended?.toLocaleString("id-ID")}</strong> baris ditambahkan ke Master &middot;{" "}
+                  <strong>{result.rows_updated?.toLocaleString("id-ID") ?? "0"}</strong> baris dilengkapi dari mapping &middot;{" "}
                   <strong>{result.rows_skipped?.toLocaleString("id-ID")}</strong> dilewati &middot;{" "}
                   Total <strong>{result.total_rows?.toLocaleString("id-ID")}</strong> baris diproses
                 </p>

@@ -1,7 +1,6 @@
 // Master OS Claim Page — reads from master_data via /api/master/data
 import { useState, useEffect, useCallback } from "react";
 import { getMasterData, exportMasterCsv } from "../services/api";
-import { useColumnMappings } from "../hooks/useColumnMappings";
 import {
   TableCellsIcon,
   ArrowDownTrayIcon,
@@ -15,7 +14,6 @@ import {
 const PAGE_SIZE = 50;
 
 export default function MasterPage() {
-  const { profiles, error: mappingsError } = useColumnMappings();
   const [data,        setData]        = useState(null);   // { total, rows }
   const [page,        setPage]        = useState(0);
   const [search,      setSearch]      = useState("");
@@ -60,39 +58,23 @@ export default function MasterPage() {
   /* Extract display fields from the stored row_data JSON */
   function mapRow(r) {
     const d = r.row_data || {};
+    const displayValue = (value) => {
+      if (value === null || value === undefined) return "";
+      const text = String(value).trim();
+      return ["-", "—", "–", "nan", "none"].includes(text.toLowerCase()) ? "" : text;
+    };
 
     // ── Sheet — pakai sheet_name dari upload job, fallback ke row_data ──
-    const sheet = r.sheet_name || d.sheet || "—";
-
-    // ── Cedant — prioritas: field cedant dari DB → lookup via sheet ──────
-    const cedant = (() => {
-      // Resolve the stored code to the name used by the active DB mapping.
-      const profilesForCedant = profiles.filter(p =>
-        p.cedantCode === r.cedant && p.tipe_data === tipeData
-      );
-      const sheetName = (r.sheet_name || "").toLowerCase();
-      const matchingProfile = profilesForCedant.find(p =>
-        p.sheetMet.toLowerCase().split(", ").some(sheet => sheet === sheetName)
-      ) || profilesForCedant[0];
-      if (matchingProfile?.cedant) return matchingProfile.cedant;
-
-      // 1. Cedant tersimpan langsung di row (dikirim saat upload manual)
-      if (r.cedant && r.cedant.trim()) return r.cedant.trim();
-
-      return "—";
-    })();
-
-    const outstanding = d.outstanding ?? d.value ?? "—";
-    const dol = d.dol || "—";
-    const ket = d.keterangan || d.description || "—";
+    const sheet = displayValue(r.sheet_name || d.sheet);
 
     return {
-      cedant,
+      cedant: displayValue(r.cedant),
       sheet,
-      lossRef:     r.primary_key_value ?? "—",
-      outstanding,
-      dol,
-      ket,
+      lossRef: displayValue(r.primary_key_value),
+      outstanding: displayValue(d.outstanding ?? d.value),
+      dol: displayValue(d.dol),
+      currency: displayValue(d.currency),
+      ket: displayValue(d.keterangan || d.description),
     };
   }
 
@@ -171,12 +153,6 @@ export default function MasterPage() {
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">{error}</div>
         )}
-        {mappingsError && (
-          <div role="alert" className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl text-sm">
-            Mapping database gagal dimuat: {mappingsError}
-          </div>
-        )}
-
         {/* ── Main card ── */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
 
@@ -217,26 +193,29 @@ export default function MasterPage() {
             <table className="min-w-full text-xs">
               <thead>
                 <tr className="border-b border-gray-200 bg-white">
-                  <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Cedant</th>
+                  <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Cedant Code</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Sheet</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Loss Ref</th>
                   <th className="px-4 py-3 text-right text-xs font-bold text-teal-700 whitespace-nowrap">Outstanding</th>
+                  {activeTab === "os" && (
+                    <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Currency</th>
+                  )}
                   <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Date of Loss</th>
                   <th className="px-4 py-3 text-left text-xs font-bold text-teal-700 whitespace-nowrap">Keterangan Loss Ref</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading && (
-                  <tr><td colSpan={6} className="text-center py-12 text-gray-400 animate-pulse">Memuat data…</td></tr>
+                  <tr><td colSpan={activeTab === "os" ? 7 : 6} className="text-center py-12 text-gray-400 animate-pulse">Memuat data…</td></tr>
                 )}
                 {!loading && totalRows === 0 && (
-                  <tr><td colSpan={6} className="text-center py-12 text-gray-400">
+                  <tr><td colSpan={activeTab === "os" ? 7 : 6} className="text-center py-12 text-gray-400">
                     Belum ada data. Upload file terlebih dahulu dari halaman Upload.
                   </td></tr>
                 )}
                 {!loading && rows.map((r) => {
                   const d      = mapRow(r);
-                  const outRaw = d.outstanding !== "—" ? String(d.outstanding).replace(/[^0-9.\-]/g, "") : null;
+                  const outRaw = d.outstanding.replace(/[^0-9.\-]/g, "");
                   const outNum = outRaw ? Number(outRaw) : null;
                   const isNeg  = outNum !== null && outNum < 0;
                   return (
@@ -249,8 +228,11 @@ export default function MasterPage() {
                           ? isNeg
                             ? `(${Math.abs(outNum).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
                             : outNum.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                          : "—"}
+                          : ""}
                       </td>
+                      {activeTab === "os" && (
+                        <td className="px-4 py-2 text-gray-600 whitespace-nowrap">{d.currency}</td>
+                      )}
                       <td className="px-4 py-2 text-gray-600 whitespace-nowrap">{d.dol}</td>
                       <td className="px-4 py-2 text-teal-600 max-w-[220px]">
                         <span className="truncate block" title={d.ket}>{d.ket}</span>
@@ -259,7 +241,7 @@ export default function MasterPage() {
                   );
                 })}
                 {!loading && totalRows > 0 && rows.length === 0 && (
-                  <tr><td colSpan={6} className="text-center py-12 text-gray-400">
+                  <tr><td colSpan={activeTab === "os" ? 7 : 6} className="text-center py-12 text-gray-400">
                     Tidak ada data yang cocok dengan pencarian.
                   </td></tr>
                 )}

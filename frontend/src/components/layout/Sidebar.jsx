@@ -155,7 +155,7 @@ export default function Sidebar({
                 OS Claims Hub®
               </span>
               <span className="text-[10.5px] text-slate-300/80 font-medium tracking-wide mt-0.5 truncate">
-                RU Claims
+                Treaty RU Claims
               </span>
             </div>
           )}

@@ -10,11 +10,14 @@ from .database import Base
 # Tabel utama OS Cedant — sudah ada di PostgreSQL
 # ─────────────────────────────────────────────────────────────
 
+_PK_BIGINT = BigInteger().with_variant(Integer, "sqlite")
+
+
 class MasterOsCedant(Base):
     """Tabel utama OS Claim Cedant — master_os_cedant_web."""
     __tablename__ = "master_os_cedant_web"
 
-    id          = Column(BigInteger, primary_key=True, autoincrement=True)
+    id          = Column(_PK_BIGINT, primary_key=True, autoincrement=True)
     cedant_code = Column(String(50),  nullable=True,  index=True)
     doc_no      = Column(String(255), nullable=True,  index=True, comment="Loss Ref / Doc No")
     dol         = Column(Date,        nullable=True,  comment="Date of Loss")
@@ -37,7 +40,7 @@ class MasterOsInfopack(Base):
     """Tabel utama Infopack — master_os_infopack_web."""
     __tablename__ = "master_os_infopack_web"
 
-    id          = Column(BigInteger, primary_key=True, autoincrement=True)
+    id          = Column(_PK_BIGINT, primary_key=True, autoincrement=True)
     cedant_code = Column(String(50),  nullable=True, index=True)
     class_code  = Column(String(50),  nullable=True)
     title       = Column(Text,        nullable=True)
@@ -181,7 +184,7 @@ class MasterRawRow(Base):
     """Menyimpan seluruh kolom asli per baris dari file Excel agar semua kolom tetap bisa di-GET."""
     __tablename__ = "master_raw_rows"
 
-    id                = Column(BigInteger, primary_key=True, autoincrement=True)
+    id                = Column(_PK_BIGINT, primary_key=True, autoincrement=True)
     job_id            = Column(Integer, nullable=True, index=True)
     session_id        = Column(String(36), nullable=True, index=True)
     target_table      = Column(String(50), nullable=False, index=True)

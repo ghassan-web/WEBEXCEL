@@ -8,13 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from .models.database import engine, Base
 from .routers import compare_router, master_router, oscln_router
 
-# ── Auto-create tables on startup ──
-Base.metadata.create_all(bind=engine)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+logger = logging.getLogger(__name__)
+
+# ── Auto-create tables on startup (non-blocking if DB is unreachable) ──
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as exc:
+    logger.warning("Database auto-create skipped at startup (DB unreachable or pg_hba restricted): %s", exc)
 
 app = FastAPI(
     title="Excel Comparison API",

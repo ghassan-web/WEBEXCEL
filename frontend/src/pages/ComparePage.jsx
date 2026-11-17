@@ -14,6 +14,8 @@ import {
   CheckIcon,
   TableCellsIcon,
   DocumentTextIcon,
+  InformationCircleIcon,
+  CircleStackIcon,
 } from "@heroicons/react/24/outline";
 
 const MONTHS = [
@@ -35,64 +37,71 @@ const YEARS = Array.from({ length: 6 }, (_, i) => String(new Date().getFullYear(
 
 const WIZARD_STEPS = [
   { id: "UPLOAD",    label: "Upload & Scan File",   subtitle: "Select partner, period & scan headers" },
-  { id: "MAPPING",   label: "Map & Review Headers", subtitle: "Align core DB fields & collect all columns" },
-  { id: "EXECUTING", label: "Process & Save",       subtitle: "Save core DB & archive full columns" },
+  { id: "MAPPING",   label: "Scan & Match Columns", subtitle: "Cek kolom Excel terhadap daftar kolom target" },
+  { id: "EXECUTING", label: "Process & Save",       subtitle: "Simpan ke database & arsipkan semua kolom" },
 ];
 
-const DEFAULT_CEDANT_SCHEMA = [
-  {
-    dbField: "doc_no",
-    label: "Loss Ref / Document No",
-    required: true,
-    sqlType: "VARCHAR(255)",
-    description: "Nomor dokumen / referensi klaim utama (Primary Key)",
-  },
-  {
-    dbField: "outstanding",
-    label: "Outstanding Claim (Net OS)",
-    required: true,
-    sqlType: "NUMERIC(30, 2)",
-    description: "Nilai nominal cadangan klaim outstanding",
-  },
+/**
+ * Daftar Kolom Target yang Dicari pada File Excel.
+ * Saat ini sesuai instruksi: baru mencari DOL / Date of Loss terlebih dahulu.
+ * Kolom target berikutnya tinggal ditambahkan ke array ini.
+ */
+export const TARGET_SEARCH_COLUMNS = [
   {
     dbField: "dol",
-    label: "Date of Loss (DOL)",
-    required: false,
+    label: "DOL / Date of Loss",
+    required: true,
     sqlType: "DATE",
-    description: "Tanggal terjadinya kerugian / klaim",
-  },
-  {
-    dbField: "currency",
-    label: "Currency (Mata Uang)",
-    required: false,
-    sqlType: "VARCHAR(10)",
-    description: "Kode mata uang klaim (IDR, USD, dll.)",
+    description: "Tanggal Kejadian Klaim (Date of Loss)",
+    patterns: [
+      /^dol$/i,
+      /^date\s*of\s*loss$/i,
+      /^loss\s*date$/i,
+      /^tgl\.?\s*dol$/i,
+      /^d\.o\.l\.?$/i,
+      /^d\s*a\s*t\s*e\s*of\s*loss$/i,
+      /trans\s*desc\/dol/i,
+      /^dt\s*dol$/i,
+      /^tgl_kejadian$/i,
+      /^tg_kejadian$/i,
+      /^occur$/i,
+      /\bdol\b/i,
+      /date.*loss|loss.*date/i,
+    ],
   },
 ];
 
-const DEFAULT_INFOPACK_SCHEMA = [
-  {
-    dbField: "class_code",
-    label: "Class Code (COB)",
-    required: false,
-    sqlType: "VARCHAR(50)",
-    description: "Kode lini bisnis / Class of Business",
-  },
-  {
-    dbField: "title",
-    label: "Title / Insured / Uraian",
-    required: true,
-    sqlType: "TEXT",
-    description: "Nama tertanggung atau judul baris InfoPack",
-  },
-  {
-    dbField: "value",
-    label: "Value / Gross Amount",
-    required: true,
-    sqlType: "TEXT",
-    description: "Nilai angka / nominal pada laporan InfoPack",
-  },
-];
+/** Auto-match daftar kolom Excel terhadap TARGET_SEARCH_COLUMNS */
+function matchExcelColumnsToTargets(excelColumns = [], activeProfile = null) {
+  const matchedMap = {}; // { dbField: excelColName }
+  const usedCols = new Set();
+
+  TARGET_SEARCH_COLUMNS.forEach((target) => {
+    /* 1. Cek dari profil mapping cedant terlebih dahulu (misal profile.dateOfLoss) */
+    if (target.dbField === "dol" && activeProfile?.dateOfLoss && activeProfile.dateOfLoss !== "—" && activeProfile.dateOfLoss !== "(Tidak tersedia)") {
+      const exactFromProfile = excelColumns.find(
+        (c) => c.trim().toLowerCase() === activeProfile.dateOfLoss.trim().toLowerCase()
+      );
+      if (exactFromProfile) {
+        matchedMap[target.dbField] = exactFromProfile;
+        usedCols.add(exactFromProfile);
+        return;
+      }
+    }
+
+    /* 2. Cek berdasarkan regex patterns */
+    for (const pat of target.patterns || []) {
+      const found = excelColumns.find((c) => !usedCols.has(c) && pat.test(String(c).trim()));
+      if (found) {
+        matchedMap[target.dbField] = found;
+        usedCols.add(found);
+        break;
+      }
+    }
+  });
+
+  return matchedMap;
+}
 
 /** Auto-detect bulan & tahun dari nama file (contoh: "ACA - 08_INDO RE - Os per 31Agt2026...") */
 function detectMonthYearFromFilename(filename) {
@@ -130,7 +139,13 @@ function detectMonthYearFromFilename(filename) {
 }
 
 export default function ComparePage({ onNavigate }) {
-  const { profiles, loading: mappingsLoading } = useColumnMappings();
+  const {
+    profiles,
+    loading: mappingsLoading,
+    error: mappingsError,
+    dbConnected,
+    reload: reloadMappings,
+  } = useColumnMappings();
 
   /* ── Wizard & Form State ── */
   const [currentStep, setCurrentStep] = useState("UPLOAD"); // 'UPLOAD' | 'MAPPING' | 'EXECUTING' | 'SUCCESS'
@@ -138,8 +153,9 @@ export default function ComparePage({ onNavigate }) {
   const [bulan, setBulan] = useState("08");
   const [tahun, setTahun] = useState(String(new Date().getFullYear()));
 
-  /* ── Cedant Search & Selection ── */
+  /* ── Insurance Company Search & Selection ── */
   const [selectedCedant, setSelectedCedant] = useState(null); // { name, code }
+  const [selectedProfileIdx, setSelectedProfileIdx] = useState(0);
   const [cedantQuery, setCedantQuery] = useState("");
   const [cedantDropdownOpen, setCedantDropdownOpen] = useState(false);
   const cedantWrapperRef = useRef(null);
@@ -150,8 +166,8 @@ export default function ComparePage({ onNavigate }) {
   const [isInspecting, setIsInspecting] = useState(false);
   const [inspectData, setInspectData] = useState(null);
   const [selectedSheet, setSelectedSheet] = useState("");
-  const [mapping, setMapping] = useState({}); // { doc_no: "DocNo", outstanding: "Amount_Net_OS", ... }
-  const [filterMode, setFilterMode] = useState("ALL"); // 'ALL' | 'CORE' | 'EXTRA'
+  const [mapping, setMapping] = useState({}); // { dol: "DOL", ... }
+  const [filterMode, setFilterMode] = useState("ALL"); // 'ALL' | 'MATCHED' | 'UNMATCHED'
   const [filterText, setFilterText] = useState("");
 
   /* ── Execution / Upload State ── */
@@ -163,24 +179,34 @@ export default function ComparePage({ onNavigate }) {
   const isInfopack = activeTab === "infopack";
   const tipeData = isInfopack ? "Infopack" : "OS Cedant";
 
-  /* ── Unique Cedant List from DB Mappings ── */
+  /* ── Unique Insurance Company List ── */
+  const allProfilesForTab = useMemo(
+    () => profiles.filter((p) => p.tipe_data === (isInfopack ? "Infopack" : "OS Cedant")),
+    [profiles, isInfopack]
+  );
+
   const cedantOptions = useMemo(() => {
-    const filtered = profiles.filter(
-      (p) => p.tipe_data === (isInfopack ? "Infopack" : "OS Cedant")
-    );
     const map = new Map();
-    filtered.forEach((p) => {
+    allProfilesForTab.forEach((p) => {
       if (p.cedant && !map.has(p.cedant)) {
         map.set(p.cedant, {
           name: p.cedant,
           code: p.cedantCode || p.cedant,
           sheets: p.sheetMet || "All sheets",
           lossRef: p.lossRef || "",
+          dateOfLoss: p.dateOfLoss || "",
         });
       }
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "id"));
-  }, [profiles, isInfopack]);
+  }, [allProfilesForTab]);
+
+  const activeCedantProfiles = useMemo(() => {
+    if (!selectedCedant?.name) return [];
+    return allProfilesForTab.filter((p) => p.cedant === selectedCedant.name);
+  }, [allProfilesForTab, selectedCedant]);
+
+  const currentProfile = activeCedantProfiles[selectedProfileIdx] ?? activeCedantProfiles[0] ?? null;
 
   const filteredCedants = useMemo(() => {
     if (!cedantQuery.trim()) return cedantOptions;
@@ -216,11 +242,6 @@ export default function ComparePage({ onNavigate }) {
     return inspectData.sheet_row_counts?.[selectedSheet] ?? 0;
   }, [inspectData, selectedSheet]);
 
-  const targetSchema = useMemo(() => {
-    if (inspectData?.target_schema?.length) return inspectData.target_schema;
-    return isInfopack ? DEFAULT_INFOPACK_SCHEMA : DEFAULT_CEDANT_SCHEMA;
-  }, [inspectData, isInfopack]);
-
   /* ── Handle File Drop / Select & Run Header Scanner (/api/master/inspect) ── */
   const handleSelectFile = async (rawFile) => {
     if (!rawFile) return;
@@ -239,98 +260,112 @@ export default function ComparePage({ onNavigate }) {
     if (detM) setBulan(detM);
     if (detY) setTahun(detY);
 
+    /* Auto-detect Insurance Company dari nama file jika belum dipilih */
+    let activeCedantObj = selectedCedant;
+    if (!activeCedantObj) {
+      const upperName = rawFile.name.toUpperCase();
+      const matchedFromFilename = cedantOptions.find((c) => {
+        const cleanName = c.name.replace(/\s*\(.*?\)\s*/g, "").trim().toUpperCase();
+        return cleanName.length >= 3 && upperName.includes(cleanName);
+      });
+      if (matchedFromFilename) {
+        activeCedantObj = matchedFromFilename;
+        setSelectedCedant(matchedFromFilename);
+        setSelectedProfileIdx(0);
+      }
+    }
+
     /* Jalankan scan header ke backend */
     setIsInspecting(true);
     try {
       const fd = new FormData();
       fd.append("file", rawFile);
       fd.append("tipe_data", tipeData);
-      if (selectedCedant?.name) fd.append("cedant", selectedCedant.name);
-      if (selectedCedant?.code) fd.append("cedant_code", selectedCedant.code);
+      if (activeCedantObj?.name) fd.append("cedant", activeCedantObj.name);
+      if (activeCedantObj?.code) fd.append("cedant_code", activeCedantObj.code);
 
       const res = await inspectMasterFile(fd);
       setInspectData(res);
 
       const defSheet = res.default_sheet || res.available_sheets?.[0] || "";
       setSelectedSheet(defSheet);
-      setMapping(res.auto_mappings?.[defSheet] || {});
 
-      /* Jika cedant belum dipilih manual tapi terdeteksi dari file/mapping, set otomatis */
-      if (!selectedCedant && (res.cedant_name || res.cedant_code)) {
-        const matchedOpt = cedantOptions.find(
-          (c) =>
-            c.code.toLowerCase() === String(res.cedant_code || "").toLowerCase() ||
-            c.name.toLowerCase() === String(res.cedant_name || "").toLowerCase()
-        );
-        if (matchedOpt) {
-          setSelectedCedant(matchedOpt);
-        } else if (res.cedant_code) {
-          setSelectedCedant({
-            name: res.cedant_name || res.cedant_code,
-            code: res.cedant_code,
-          });
-        }
-      }
+      const cols = res.sheet_columns?.[defSheet] || [];
+      const prof = allProfilesForTab.find((p) => p.cedant === activeCedantObj?.name) || null;
+      const initialTargetMap = matchExcelColumnsToTargets(cols, prof);
+      /* Gabungkan juga auto_mappings dari backend untuk doc_no / outstanding / currency di balik layar */
+      const backendMap = res.auto_mappings?.[defSheet] || {};
+      setMapping({
+        ...backendMap,
+        ...initialTargetMap,
+      });
     } catch (err) {
-      setErrorMessage(err.message || "Gagal memindai header file Excel.");
+      setErrorMessage(err.message || "Gagal memindai header file Excel. Pastikan backend berjalan di port 8000.");
       setInspectData(null);
     } finally {
       setIsInspecting(false);
     }
   };
 
-  /* Saat user mengganti sheet aktif, muat auto_mapping untuk sheet tersebut */
+  /* Saat user mengganti sheet aktif, jalankan pencocokan ulang untuk sheet tersebut */
   const handleSheetChange = (newSheet) => {
     setSelectedSheet(newSheet);
-    if (inspectData?.auto_mappings?.[newSheet]) {
-      setMapping(inspectData.auto_mappings[newSheet]);
-    }
-  };
-
-  const handleUpdateMapping = (dbField, excelCol) => {
-    setMapping((prev) => {
-      const next = { ...prev };
-      if (!excelCol) delete next[dbField];
-      else next[dbField] = excelCol;
-      return next;
+    const cols = inspectData?.sheet_columns?.[newSheet] || [];
+    const backendMap = inspectData?.auto_mappings?.[newSheet] || {};
+    const targetMap = matchExcelColumnsToTargets(cols, currentProfile);
+    setMapping({
+      ...backendMap,
+      ...targetMap,
     });
   };
 
   const handleAutoMatchAgain = () => {
-    if (inspectData?.auto_mappings?.[selectedSheet]) {
-      setMapping({ ...inspectData.auto_mappings[selectedSheet] });
-    }
+    const cols = inspectData?.sheet_columns?.[selectedSheet] || [];
+    const backendMap = inspectData?.auto_mappings?.[selectedSheet] || {};
+    const targetMap = matchExcelColumnsToTargets(cols, currentProfile);
+    setMapping({
+      ...backendMap,
+      ...targetMap,
+    });
   };
 
-  /* ── Kelengkapan Kolom Inti DB ── */
-  const requiredFields = useMemo(
-    () => targetSchema.filter((f) => f.required),
-    [targetSchema]
-  );
-  const mappedRequiredCount = useMemo(
-    () => requiredFields.filter((f) => Boolean(mapping?.[f.dbField])).length,
-    [requiredFields, mapping]
-  );
-  const isMappingComplete = requiredFields.length === 0 || mappedRequiredCount === requiredFields.length;
+  /* Mengubah penugasan kolom Excel ke kolom Target (misal memilih kolom mana yang merupakan DOL) */
+  const handleAssignExcelColumnToTarget = (excelColName, targetDbField) => {
+    setMapping((prev) => {
+      const next = { ...prev };
+      /* Hapus penugasan lama jika kolom Excel ini sebelumnya dipetakan ke target lain */
+      TARGET_SEARCH_COLUMNS.forEach((t) => {
+        if (next[t.dbField] === excelColName) {
+          delete next[t.dbField];
+        }
+      });
+      if (targetDbField) {
+        next[targetDbField] = excelColName;
+      }
+      return next;
+    });
+  };
 
-  /* ── Daftar Kolom Excel yang Terpetakan ke DB vs Kolom Tambahan yang Tetap Disimpan ── */
-  const mappedSourceSet = useMemo(() => {
-    const s = new Set();
-    Object.values(mapping || {}).forEach((val) => {
-      if (val) {
-        String(val)
-          .split("|")
-          .forEach((p) => {
-            if (p.trim()) s.add(p.trim());
-          });
+  /* Lookup cepat: untuk setiap kolom Excel, apakah dia cocok dengan salah satu TARGET_SEARCH_COLUMNS? */
+  const excelColToTargetMap = useMemo(() => {
+    const map = {}; // { excelColName: targetObj }
+    TARGET_SEARCH_COLUMNS.forEach((t) => {
+      const assignedExcelCol = mapping?.[t.dbField];
+      if (assignedExcelCol) {
+        map[assignedExcelCol] = t;
       }
     });
-    return s;
+    return map;
   }, [mapping]);
 
-  const extraScannedColumns = useMemo(
-    () => scannedColumns.filter((col) => !mappedSourceSet.has(col)),
-    [scannedColumns, mappedSourceSet]
+  const matchedExcelColsCount = useMemo(
+    () => scannedColumns.filter((col) => Boolean(excelColToTargetMap[col])).length,
+    [scannedColumns, excelColToTargetMap]
+  );
+
+  const unmatchedExcelColsCount = useMemo(
+    () => scannedColumns.length - matchedExcelColsCount,
+    [scannedColumns, matchedExcelColsCount]
   );
 
   /* ── Eksekusi Simpan ke Master Database (Step 2 -> Step 3) ── */
@@ -385,7 +420,7 @@ export default function ComparePage({ onNavigate }) {
 
   return (
     <div className="mx-auto w-full max-w-[1440px] px-4 sm:px-6 py-6 space-y-6 font-sans">
-      {/* ── Connected 3-Step Wizard Bar (mengikuti referensi example/UploadBordero.jsx) ── */}
+      {/* ── Connected 3-Step Wizard Bar ── */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-surface)] px-5 py-3.5 shadow-[var(--shadow-card)] flex flex-wrap items-center justify-between gap-4">
         {WIZARD_STEPS.map((step, idx) => {
           const isCurrent = currentStep === step.id;
@@ -449,7 +484,7 @@ export default function ComparePage({ onNavigate }) {
       )}
 
       {/* ════════════════════════════════════════════════════════════════════
-          STEP 1: UPLOAD & SCAN WORKBOOK HEADERS (mengikuti example/UploadWidget.jsx)
+          STEP 1: UPLOAD & SCAN WORKBOOK HEADERS
       ════════════════════════════════════════════════════════════════════ */}
       {currentStep === "UPLOAD" && (
         <div className="bg-[var(--color-surface)] p-5 sm:p-6 rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)] w-full space-y-6 text-[var(--text-body)]">
@@ -460,7 +495,7 @@ export default function ComparePage({ onNavigate }) {
                 Upload OS Claims &amp; InfoPack Files
               </h2>
               <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
-                Pilih perusahaan asuransi (cedant), periode cut-off, dan unggah file Excel untuk memindai seluruh header kolom secara otomatis.
+                Pilih Insurance Company, periode cut-off, dan unggah file Excel untuk memindai seluruh header kolom secara otomatis.
               </p>
             </div>
 
@@ -480,6 +515,7 @@ export default function ComparePage({ onNavigate }) {
                     onClick={() => {
                       setActiveTab(tab.key);
                       setSelectedCedant(null);
+                      setSelectedProfileIdx(0);
                       handleResetAll();
                     }}
                     className={`px-3 py-1 text-xs font-bold rounded-[calc(var(--radius-control)-2px)] transition-all cursor-pointer ${
@@ -495,13 +531,56 @@ export default function ComparePage({ onNavigate }) {
             </div>
           </div>
 
-          {/* Top Configuration: Cedant Picker, Period Cut-Off & Pipeline Status */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end pb-5 border-b border-[var(--color-line)]">
-            {/* Insurance Company (Cedant) Selector */}
+          {/* Database Connection Status Bar (Memuat ke database / Connect status) */}
+          <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-[var(--radius-control)] bg-[var(--color-surface-sunken)] border border-[var(--color-line)] text-xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <CircleStackIcon className="w-4 h-4 text-[var(--color-brand)] shrink-0" />
+              {mappingsLoading ? (
+                <span className="text-[var(--color-ink-muted)] font-medium animate-pulse">
+                  Memuat mapping database &amp; memeriksa koneksi...
+                </span>
+              ) : dbConnected ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-valid)] shrink-0" />
+                  <span className="font-semibold text-[var(--color-ink)]">
+                    Database Connected
+                  </span>
+                  <span className="text-[var(--color-ink-muted)]">
+                    · {cedantOptions.length} Insurance Company tersedia untuk pencarian
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                  <span className="font-semibold text-[var(--color-ink)]">
+                    Mode Referensi Aktif ({cedantOptions.length} Insurance Company tersedia)
+                  </span>
+                  {mappingsError && (
+                    <span className="text-[var(--color-ink-muted)] truncate max-w-md">
+                      · Status DB: {mappingsError}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={reloadMappings}
+              disabled={mappingsLoading}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-brand)] hover:underline disabled:opacity-50 cursor-pointer shrink-0"
+            >
+              <ArrowPathIcon className={`w-3.5 h-3.5 ${mappingsLoading ? "animate-spin" : ""}`} />
+              <span>Reconnect / Refresh DB</span>
+            </button>
+          </div>
+
+          {/* Top Configuration: Insurance Company Picker, Period Cut-Off & Status */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start pb-5 border-b border-[var(--color-line)]">
+            {/* Insurance Company Selector (tanpa teks dalam kurung cedant) */}
             <div className="lg:col-span-5 relative" ref={cedantWrapperRef}>
               <label className="block font-bold text-[var(--color-ink)] mb-1 text-xs">
-                Insurance Company (Cedant){" "}
-                <span className="text-[var(--color-ink-muted)] font-normal">(opsional / auto-detect)</span>
+                Insurance Company <span className="text-[var(--color-danger)]">*</span>
               </label>
               <div className="relative flex items-center bg-[var(--color-surface-sunken)] border border-[var(--color-line)] rounded-[var(--radius-control)] focus-within:border-[var(--color-brand)] focus-within:bg-[var(--color-surface)] focus-within:ring-2 focus-within:ring-[var(--color-brand)]/15 transition-all">
                 <MagnifyingGlassIcon className="w-4 h-4 text-[var(--color-ink-muted)] ml-3 shrink-0" />
@@ -515,14 +594,15 @@ export default function ComparePage({ onNavigate }) {
                   placeholder={
                     selectedCedant
                       ? selectedCedant.name
-                      : mappingsLoading
-                        ? "Memuat daftar cedant..."
-                        : "Cari nama atau kode cedant (atau biarkan auto-detect)..."
+                      : "Search company name or code (e.g. ACA, SOMPO, ASKRINDO)..."
                   }
                   value={selectedCedant ? selectedCedant.name : cedantQuery}
                   onChange={(e) => {
                     setCedantQuery(e.target.value);
-                    if (selectedCedant) setSelectedCedant(null);
+                    if (selectedCedant) {
+                      setSelectedCedant(null);
+                      setSelectedProfileIdx(0);
+                    }
                     setCedantDropdownOpen(true);
                   }}
                   onFocus={() => setCedantDropdownOpen(true)}
@@ -531,9 +611,10 @@ export default function ComparePage({ onNavigate }) {
                 {(selectedCedant || cedantQuery) && (
                   <button
                     type="button"
-                    aria-label="Clear cedant selection"
+                    aria-label="Clear insurance company selection"
                     onClick={() => {
                       setSelectedCedant(null);
+                      setSelectedProfileIdx(0);
                       setCedantQuery("");
                     }}
                     className="mr-3 text-[var(--color-ink-muted)] hover:text-[var(--color-danger)] cursor-pointer"
@@ -544,27 +625,10 @@ export default function ComparePage({ onNavigate }) {
               </div>
 
               {cedantDropdownOpen && (
-                <div className="absolute left-0 right-0 mt-1.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-surface)] shadow-[var(--shadow-overlay)] z-30 max-h-60 overflow-y-auto p-1 scrollbar-none">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedCedant(null);
-                      setCedantQuery("");
-                      setCedantDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-3 py-2 rounded-[var(--radius-control)] text-xs flex items-center justify-between hover:bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] transition-colors cursor-pointer border-b border-[var(--color-line)]/60 mb-1"
-                  >
-                    <span className="font-semibold text-[var(--color-brand)]">
-                      ✦ Auto-detect dari File &amp; Mapping Database
-                    </span>
-                    <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-brand-soft)] text-[var(--color-brand)]">
-                      AUTO
-                    </span>
-                  </button>
-
+                <div className="absolute left-0 right-0 mt-1.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-surface)] shadow-[var(--shadow-overlay)] z-30 max-h-64 overflow-y-auto p-1 scrollbar-none">
                   {filteredCedants.length === 0 ? (
                     <div className="px-3 py-4 text-center text-xs text-[var(--color-ink-muted)] italic">
-                      Cedant tidak ditemukan.
+                      Insurance company tidak ditemukan.
                     </div>
                   ) : (
                     filteredCedants.map((c) => (
@@ -573,6 +637,7 @@ export default function ComparePage({ onNavigate }) {
                         type="button"
                         onClick={() => {
                           setSelectedCedant(c);
+                          setSelectedProfileIdx(0);
                           setCedantDropdownOpen(false);
                           setCedantQuery("");
                         }}
@@ -590,12 +655,42 @@ export default function ComparePage({ onNavigate }) {
                             {c.name}
                           </span>
                         </div>
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] border border-[var(--color-line)] shrink-0 ml-2">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] border border-[var(--color-line)] shrink-0 ml-2 max-w-[160px] truncate">
                           {c.sheets}
                         </span>
                       </button>
                     ))
                   )}
+                </div>
+              )}
+
+              {/* Info profil mapping jika Insurance Company dipilih */}
+              {selectedCedant && activeCedantProfiles.length > 1 && (
+                <div className="mt-2">
+                  <label className="block text-[11px] font-semibold text-[var(--color-ink-muted)] mb-1">
+                    Sheet / Variant ({activeCedantProfiles.length} profil tersedia)
+                  </label>
+                  <select
+                    value={selectedProfileIdx}
+                    onChange={(e) => setSelectedProfileIdx(Number(e.target.value))}
+                    className="w-full py-1.5 px-2.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-control)] text-xs font-medium text-[var(--color-ink)]"
+                  >
+                    {activeCedantProfiles.map((p, i) => (
+                      <option key={i} value={i}>
+                        {p.sheetMet} — DOL: {p.dateOfLoss}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {selectedCedant && currentProfile && (
+                <div className="mt-2 px-3 py-2 rounded-[var(--radius-control)] bg-[var(--color-brand-soft)]/60 border border-[var(--color-brand-line)] flex items-center gap-2 text-xs text-[var(--color-brand)]">
+                  <InformationCircleIcon className="w-4 h-4 shrink-0" />
+                  <span className="truncate">
+                    Sheet: <strong>{currentProfile.sheetMet}</strong> · Target DOL:{" "}
+                    <strong className="font-mono">{currentProfile.dateOfLoss}</strong>
+                  </span>
                 </div>
               )}
             </div>
@@ -637,15 +732,22 @@ export default function ComparePage({ onNavigate }) {
             </div>
 
             {/* Pipeline Status Pill */}
-            <div className="lg:col-span-3 flex items-center lg:justify-end h-[38px]">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 h-[38px] rounded-[var(--radius-control)] text-xs bg-[var(--color-surface)] border border-[var(--color-line)] shadow-2xs">
-                <span className="w-2 h-2 rounded-full bg-[var(--color-valid)] shrink-0 animate-pulse" />
-                <span className="font-semibold text-[var(--color-ink)]">Header Scanner Active</span>
-              </div>
+            <div className="lg:col-span-3 flex items-center lg:justify-end lg:mt-5">
+              {selectedCedant ? (
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 h-[38px] rounded-[var(--radius-control)] text-xs bg-[var(--color-surface)] border border-[var(--color-line)] shadow-2xs">
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-valid)] shrink-0 animate-pulse" />
+                  <span className="font-semibold text-[var(--color-ink)]">Ready for Upload</span>
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 h-[38px] rounded-[var(--radius-control)] text-xs text-[var(--color-ink-muted)] bg-[var(--color-surface-sunken)]/60 border border-[var(--color-line)]">
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-brand)] shrink-0" />
+                  <span className="font-medium">Auto-Detect Partner Active</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Breathable Dropzone (mengikuti example/UploadWidget.jsx) */}
+          {/* Breathable Dropzone */}
           <div
             role="button"
             tabIndex={0}
@@ -680,28 +782,28 @@ export default function ComparePage({ onNavigate }) {
               <ArrowUpTrayIcon className="w-5 h-5" />
             </div>
             <p className="font-bold text-xs sm:text-sm text-[var(--color-ink)] text-center">
-              Drag &amp; drop file Excel OS Claim / InfoPack di sini, atau klik untuk memilih file
+              Drag &amp; drop file Excel di sini, atau klik untuk memilih file dari komputer
             </p>
             <span className="mt-1 text-[11px] font-mono text-[var(--color-ink-muted)]">
-              Mendukung .xlsx, .xls, .xlsm, .xlsb (Maks. 50 MB) · Seluruh header kolom akan di-scan otomatis
+              Format .xlsx, .xls, .xlsm, .xlsb (Maks. 50 MB) · Header kolom akan otomatis di-scan
             </span>
           </div>
 
-          {/* File Queue & Scanned Header Preview Section */}
+          {/* File Queue & Scanned Header Summary */}
           {file && (
             <div className="space-y-4 pt-1">
               <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[var(--color-line)]">
                 <div className="flex items-center gap-2.5">
                   <h4 className="text-xs font-bold text-[var(--color-ink)] uppercase tracking-wider">
-                    Scanned Workbook Queue (1)
+                    File Queue (1)
                   </h4>
                   {isInspecting ? (
                     <Badge tone="brand" dot>
-                      Scanning Excel Headers...
+                      Memindai Header Excel...
                     </Badge>
                   ) : inspectData ? (
                     <Badge tone="valid" dot>
-                      ✓ {scannedColumns.length} Headers Scanned &amp; Ready
+                      ✓ {scannedColumns.length} Kolom Header Terdeteksi
                     </Badge>
                   ) : null}
                 </div>
@@ -711,117 +813,66 @@ export default function ComparePage({ onNavigate }) {
                   onClick={handleResetAll}
                   className="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-danger)] font-semibold cursor-pointer"
                 >
-                  Clear File
+                  Hapus File
                 </button>
               </div>
 
-              {/* Queued File Card */}
-              <div className="p-4 rounded-[var(--radius-surface)] bg-[var(--color-surface-sunken)]/70 border border-[var(--color-line)] space-y-4">
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  <div className="flex items-start gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-[var(--radius-control)] bg-[var(--color-brand-soft)] text-[var(--color-brand)] border border-[var(--color-brand-line)] flex items-center justify-center shrink-0 mt-0.5">
-                      <DocumentTextIcon className="w-5 h-5" />
+              <div className="p-4 rounded-[var(--radius-surface)] bg-[var(--color-surface-sunken)]/70 border border-[var(--color-line)] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-[var(--radius-control)] bg-[var(--color-brand-soft)] text-[var(--color-brand)] border border-[var(--color-brand-line)] flex items-center justify-center shrink-0 mt-0.5">
+                    <DocumentTextIcon className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-sm text-[var(--color-ink)] truncate">
+                        {file.name}
+                      </span>
+                      <span className="text-[11px] font-mono text-[var(--color-ink-muted)] bg-[var(--color-surface)] px-2 py-0.5 rounded border border-[var(--color-line)]">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </span>
                     </div>
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-sm text-[var(--color-ink)] truncate">
-                          {file.name}
-                        </span>
-                        <span className="text-[11px] font-mono text-[var(--color-ink-muted)] bg-[var(--color-surface)] px-2 py-0.5 rounded border border-[var(--color-line)]">
-                          {(file.size / 1024 / 1024).toFixed(2)} MB
-                        </span>
-                        {inspectData?.detected_file_tag && (
-                          <Badge tone="brand">Tag: {inspectData.detected_file_tag}</Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-[var(--color-ink-muted)] flex-wrap">
-                        <span>
-                          Periode:{" "}
-                          <strong className="font-mono text-[var(--color-ink)]">
-                            {bulan}/{tahun}
-                          </strong>
-                        </span>
-                        <span>•</span>
-                        <span>
-                          Baris Terdeteksi:{" "}
-                          <strong className="font-mono text-[var(--color-ink)]">
-                            {sheetRowCount.toLocaleString("id-ID")} rows
-                          </strong>
-                        </span>
-                        <span>•</span>
-                        <span>
-                          Total Kolom Header:{" "}
-                          <strong className="font-mono text-[var(--color-brand)]">
-                            {scannedColumns.length} kolom
-                          </strong>
-                        </span>
-                      </div>
+                    <div className="flex items-center gap-3 text-xs text-[var(--color-ink-muted)] flex-wrap">
+                      <span>
+                        Insurance Company:{" "}
+                        <strong className="text-[var(--color-ink)]">
+                          {selectedCedant?.name || inspectData?.detected_file_tag || "Auto"}
+                        </strong>
+                      </span>
+                      <span>•</span>
+                      <span>
+                        Baris:{" "}
+                        <strong className="font-mono text-[var(--color-ink)]">
+                          {sheetRowCount.toLocaleString("id-ID")} rows
+                        </strong>
+                      </span>
+                      <span>•</span>
+                      <span>
+                        Kolom di Excel:{" "}
+                        <strong className="font-mono text-[var(--color-brand)]">
+                          {scannedColumns.length} kolom
+                        </strong>
+                      </span>
                     </div>
                   </div>
-
-                  {/* Sheet Selector Dropdown */}
-                  {inspectData?.available_sheets?.length > 0 && (
-                    <div className="flex items-center gap-2 shrink-0">
-                      <label className="text-xs font-semibold text-[var(--color-ink-muted)]">
-                        Active Sheet:
-                      </label>
-                      <select
-                        value={selectedSheet}
-                        onChange={(e) => handleSheetChange(e.target.value)}
-                        className="px-3 py-1.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-control)] text-xs font-mono font-semibold text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
-                      >
-                        {inspectData.available_sheets.map((sh) => (
-                          <option key={sh} value={sh}>
-                            {sh} ({inspectData.sheet_columns?.[sh]?.length || 0} cols)
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
                 </div>
 
-                {/* Preview seluruh header hasil scan */}
-                {!isInspecting && scannedColumns.length > 0 && (
-                  <div className="pt-3 border-t border-[var(--color-line)]/80 space-y-2">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="font-bold uppercase tracking-wider text-[var(--color-ink-muted)]">
-                        Scanned Excel Headers ({scannedColumns.length} Kolom Ditemukan):
-                      </span>
-                      <span className="text-[var(--color-valid)] font-semibold">
-                        {Object.keys(mapping).length} kolom otomatis dipetakan ke Tabel Inti DB ·{" "}
-                        {extraScannedColumns.length} kolom tambahan disimpan ke Katalog
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {scannedColumns.map((col, i) => {
-                        const isCoreMapped = mappedSourceSet.has(col);
-                        return (
-                          <span
-                            key={col}
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-control)] text-xs font-mono border transition-colors ${
-                              isCoreMapped
-                                ? "bg-[var(--color-valid-soft)] text-[var(--color-valid)] border-[var(--color-valid)]/30 font-semibold"
-                                : "bg-[var(--color-surface)] text-[var(--color-ink-body)] border-[var(--color-line)]"
-                            }`}
-                            title={
-                              sheetSamples[col]
-                                ? `Contoh nilai: ${sheetSamples[col]}`
-                                : "Header terdeteksi"
-                            }
-                          >
-                            <span className="text-[10px] text-[var(--color-ink-faint)]">
-                              #{i + 1}
-                            </span>
-                            <span>{col}</span>
-                            {isCoreMapped && (
-                              <span className="text-[9px] uppercase px-1 py-0.2 rounded bg-[var(--color-valid)] text-white font-sans font-bold">
-                                DB
-                              </span>
-                            )}
-                          </span>
-                        );
-                      })}
-                    </div>
+                {/* Sheet Selector Dropdown */}
+                {inspectData?.available_sheets?.length > 0 && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <label className="text-xs font-semibold text-[var(--color-ink-muted)]">
+                      Sheet:
+                    </label>
+                    <select
+                      value={selectedSheet}
+                      onChange={(e) => handleSheetChange(e.target.value)}
+                      className="px-3 py-1.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-control)] text-xs font-mono font-semibold text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                    >
+                      {inspectData.available_sheets.map((sh) => (
+                        <option key={sh} value={sh}>
+                          {sh} ({inspectData.sheet_columns?.[sh]?.length || 0} cols)
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 )}
               </div>
@@ -834,7 +885,7 @@ export default function ComparePage({ onNavigate }) {
                   disabled={!file || isInspecting || !inspectData || scannedColumns.length === 0}
                   onClick={() => setCurrentStep("MAPPING")}
                 >
-                  Next: Map &amp; Review All Headers
+                  Lanjut ke Tahap 2: Cek Kolom Excel
                 </Button>
               </div>
             </div>
@@ -843,7 +894,9 @@ export default function ComparePage({ onNavigate }) {
       )}
 
       {/* ════════════════════════════════════════════════════════════════════
-          STEP 2: COLUMN MAPPER & HEADER CATALOG REVIEW (mengikuti example/ColumnMapper.jsx)
+          STEP 2: TAMPILAN UI KOLOM-KOLOM DI FILE EXCEL
+          - Mencari kolom target (sementara: DOL / Date of Loss -> HIJAU)
+          - Sisanya yang tidak ketemu / belum terdaftar di target -> MERAH (dimerahin)
       ════════════════════════════════════════════════════════════════════ */}
       {currentStep === "MAPPING" && inspectData && (
         <div className="space-y-6">
@@ -857,11 +910,11 @@ export default function ComparePage({ onNavigate }) {
                   </span>
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-control)] bg-[var(--color-surface)] border border-[var(--color-line)]">
                     <span className="font-mono text-xs uppercase tracking-wider font-semibold text-[var(--color-brand)]">
-                      {selectedCedant?.code || inspectData.cedant_code || "AUTO"}
+                      {selectedCedant?.code || inspectData.detected_file_tag || "AUTO"}
                     </span>
                     <span className="text-[var(--color-line-strong)]">•</span>
                     <span className="font-sans font-medium text-xs text-[var(--color-ink)]">
-                      {selectedCedant?.name || inspectData.cedant_name || "Auto-Detect Cedant"}
+                      {selectedCedant?.name || inspectData.cedant_name || "Insurance Company"}
                     </span>
                   </div>
                   <h3
@@ -881,32 +934,18 @@ export default function ComparePage({ onNavigate }) {
                   </span>
                   <span>•</span>
                   <span>
-                    Scanned Excel Columns:{" "}
+                    Total Kolom di File Excel:{" "}
                     <strong className="text-[var(--color-ink)] font-semibold">
-                      {scannedColumns.length} Columns
+                      {scannedColumns.length} Kolom
                     </strong>
                   </span>
                   <span>•</span>
-                  <span>
-                    Core DB Target:{" "}
-                    <strong className="text-[var(--color-ink)] font-semibold">
-                      {targetSchema.length} Fields
-                    </strong>
+                  <span className="text-[var(--color-valid)] font-bold">
+                    ✓ Ketemu (Target): {matchedExcelColsCount} Kolom
                   </span>
                   <span>•</span>
-                  <span
-                    className={`inline-flex items-center gap-1 font-bold ${
-                      isMappingComplete ? "text-[var(--color-valid)]" : "text-[var(--color-danger)]"
-                    }`}
-                  >
-                    {isMappingComplete ? (
-                      <CheckCircleIcon className="w-4 h-4" />
-                    ) : (
-                      <ExclamationCircleIcon className="w-4 h-4" />
-                    )}
-                    <span>
-                      Mandatory DB Fields: {mappedRequiredCount}/{requiredFields.length}
-                    </span>
+                  <span className="text-rose-600 font-bold">
+                    ✕ Tidak Ketemu: {unmatchedExcelColsCount} Kolom
                   </span>
                 </div>
               </div>
@@ -918,21 +957,60 @@ export default function ComparePage({ onNavigate }) {
                   icon={ArrowPathIcon}
                   onClick={handleAutoMatchAgain}
                 >
-                  Auto-Match Headers
+                  Scan Ulang Kolom Target
                 </Button>
               </div>
             </div>
 
-            {/* Filter Tabs & Search Bar */}
+            {/* Banner Daftar Kolom Target yang Dicari Saat Ini */}
+            <div className="p-4 rounded-[var(--radius-surface)] bg-[var(--color-surface-sunken)] border border-[var(--color-line)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-xs font-bold uppercase tracking-wider text-[var(--color-ink)]">
+                  Target Kolom yang Dicari Saat Ini ({TARGET_SEARCH_COLUMNS.length} Target):
+                </div>
+                <p className="text-xs text-[var(--color-ink-muted)]">
+                  Kolom Excel yang cocok dengan daftar target ditandai <strong>Hijau (Matched)</strong>, sedangkan kolom lainnya yang tidak termasuk/tidak ketemu ditandai <strong>Merah</strong>. Seluruh {scannedColumns.length} kolom tetap disimpan agar bisa di-GET.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
+                {TARGET_SEARCH_COLUMNS.map((t) => {
+                  const foundCol = mapping?.[t.dbField];
+                  return (
+                    <div
+                      key={t.dbField}
+                      className={`px-3 py-1.5 rounded-[var(--radius-control)] border text-xs font-semibold flex items-center gap-2 ${
+                        foundCol
+                          ? "bg-[var(--color-valid-soft)] text-[var(--color-valid)] border-[var(--color-valid)]/30"
+                          : "bg-rose-500/15 text-rose-600 border-rose-500/30"
+                      }`}
+                    >
+                      {foundCol ? (
+                        <>
+                          <CheckCircleIcon className="w-4 h-4 shrink-0" />
+                          <span>
+                            {t.label}: <strong className="font-mono">{foundCol}</strong>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <ExclamationCircleIcon className="w-4 h-4 shrink-0" />
+                          <span>{t.label}: TIDAK DITEMUKAN</span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Filter Mode Buttons & Search */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
                 {[
-                  { id: "ALL", label: `All Scanned & Target (${scannedColumns.length})` },
-                  { id: "CORE", label: `Core DB Fields (${targetSchema.length})` },
-                  {
-                    id: "EXTRA",
-                    label: `Collected Extra Headers (${extraScannedColumns.length})`,
-                  },
+                  { id: "ALL", label: `Semua Kolom Excel (${scannedColumns.length})` },
+                  { id: "MATCHED", label: `Ketemu / Matched (${matchedExcelColsCount})` },
+                  { id: "UNMATCHED", label: `Tidak Ketemu / Merah (${unmatchedExcelColsCount})` },
                 ].map((mode) => (
                   <button
                     key={mode.id}
@@ -955,7 +1033,7 @@ export default function ComparePage({ onNavigate }) {
                   type="text"
                   value={filterText}
                   onChange={(e) => setFilterText(e.target.value)}
-                  placeholder="Cari nama kolom atau sampel..."
+                  placeholder="Cari nama kolom Excel..."
                   className="w-full pl-8 pr-7 py-1.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-lg text-xs font-medium text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20"
                 />
                 {filterText && (
@@ -970,229 +1048,117 @@ export default function ComparePage({ onNavigate }) {
               </div>
             </div>
 
-            {/* ── TABLE 1: CORE TARGET DATABASE FIELDS (Masuk ke Tabel Utama PostgreSQL) ── */}
-            {(filterMode === "ALL" || filterMode === "CORE") && (
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--color-ink)]">
-                      1. Core Database Columns ({isInfopack ? "master_os_infopack_web" : "master_os_cedant_web"})
-                    </h4>
-                    <p className="text-[11px] text-[var(--color-ink-muted)]">
-                      Kolom-kolom utama di bawah ini akan diekstrak, dinormalisasi, dan disimpan langsung ke kolom tabel utama PostgreSQL.
-                    </p>
-                  </div>
-                </div>
+            {/* ── TABEL UTAMA TAHAP 2: SELURUH KOLOM YANG ADA DI FILE EXCEL ── */}
+            <div className="border border-[var(--color-line)] rounded-[var(--radius-surface)] overflow-x-auto table-scroll shadow-2xs">
+              <table className="w-full text-left border-collapse font-sans text-xs sm:text-[13px]">
+                <thead>
+                  <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[var(--color-ink-muted)] text-[11px] uppercase font-bold tracking-wider">
+                    <th className="py-3 px-3 w-12 text-center border-r border-[var(--color-line)]">No</th>
+                    <th className="py-3 px-4 w-4/12 border-r border-[var(--color-line)]">
+                      Kolom di File Excel (Scanned Header)
+                    </th>
+                    <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">
+                      Contoh Nilai (Baris 1)
+                    </th>
+                    <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">
+                      Target Kolom Dicari
+                    </th>
+                    <th className="py-3 px-4 w-2/12">Status Pencarian</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-line)] text-[var(--color-ink)]">
+                  {scannedColumns
+                    .filter((col) => {
+                      const matchedTarget = excelColToTargetMap[col];
+                      if (filterMode === "MATCHED" && !matchedTarget) return false;
+                      if (filterMode === "UNMATCHED" && matchedTarget) return false;
+                      if (!filterText.trim()) return true;
+                      const q = filterText.toLowerCase();
+                      const sample = String(sheetSamples[col] || "").toLowerCase();
+                      return col.toLowerCase().includes(q) || sample.includes(q);
+                    })
+                    .map((col, idx) => {
+                      const matchedTarget = excelColToTargetMap[col];
+                      const isMatched = Boolean(matchedTarget);
 
-                <div className="border border-[var(--color-line)] rounded-[var(--radius-surface)] overflow-x-auto table-scroll shadow-2xs">
-                  <table className="w-full text-left border-collapse font-sans text-xs sm:text-[13px]">
-                    <thead>
-                      <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[var(--color-ink-muted)] text-[11px] uppercase font-bold tracking-wider">
-                        <th className="py-3 px-3 w-12 text-center border-r border-[var(--color-line)]">No</th>
-                        <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">Core Target Field</th>
-                        <th className="py-3 px-4 w-4/12 border-r border-[var(--color-line)]">Source Column (Scanned Excel Header)</th>
-                        <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">Sample Value (from File)</th>
-                        <th className="py-3 px-4 w-2/12">DB Column &amp; Type</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--color-line)] text-[var(--color-ink)]">
-                      {targetSchema
-                        .filter((col) => {
-                          if (!filterText.trim()) return true;
-                          const q = filterText.toLowerCase();
-                          const src = mapping?.[col.dbField] || "";
-                          return (
-                            col.label.toLowerCase().includes(q) ||
-                            col.dbField.toLowerCase().includes(q) ||
-                            src.toLowerCase().includes(q)
-                          );
-                        })
-                        .map((targetCol, idx) => {
-                          const selectedSource = mapping?.[targetCol.dbField] || "";
-                          const isMapped = Boolean(selectedSource);
-                          const isRequired = targetCol.required;
-                          const sampleVal = selectedSource
-                            ? selectedSource
-                                .split("|")
-                                .map((p) => sheetSamples[p.trim()] || "")
-                                .filter(Boolean)
-                                .join(" | ")
-                            : "";
+                      /* Kolom yang cocok (DOL) -> Hijau; Sisanya yang gak ketemu -> Merah */
+                      const rowClass = isMatched
+                        ? "bg-[var(--color-valid-soft)]/55 hover:bg-[var(--color-valid-soft)] border-l-4 border-l-[var(--color-valid)]"
+                        : "bg-rose-500/10 hover:bg-rose-500/15 border-l-4 border-l-rose-500";
 
-                          const rowClass = isMapped
-                            ? "bg-[var(--color-valid-soft)]/45 hover:bg-[var(--color-valid-soft)]/80 border-l-4 border-l-[var(--color-valid)]"
-                            : isRequired
-                              ? "bg-rose-500/10 hover:bg-rose-500/15 border-l-4 border-l-rose-500"
-                              : "bg-amber-500/5 hover:bg-amber-500/10 border-l-4 border-l-amber-500/30";
+                      return (
+                        <tr key={col} className={`transition-colors ${rowClass}`}>
+                          <td className="py-3 px-3 text-center font-mono text-xs text-[var(--color-ink-muted)] font-semibold border-r border-[var(--color-line)]">
+                            {idx + 1}
+                          </td>
 
-                          return (
-                            <tr key={targetCol.dbField} className={`transition-colors ${rowClass}`}>
-                              <td className="py-3 px-3 text-center font-mono text-xs text-[var(--color-ink-muted)] font-semibold border-r border-[var(--color-line)]">
-                                {idx + 1}
-                              </td>
-                              <td className="py-3 px-4 border-r border-[var(--color-line)]">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div>
-                                    <span className="font-semibold text-[var(--color-ink)] block">
-                                      {targetCol.label}
-                                    </span>
-                                    <span className="text-[11px] text-[var(--color-ink-muted)]">
-                                      {targetCol.description}
-                                    </span>
-                                  </div>
-                                  {isMapped ? (
-                                    <span className="px-2 py-0.5 rounded-[var(--radius-control)] bg-[var(--color-valid-soft)] text-[var(--color-valid)] font-semibold text-[10px] shrink-0 border border-[var(--color-valid)]/25 flex items-center gap-1">
-                                      <CheckCircleIcon className="w-3.5 h-3.5" />
-                                      <span>Mapped</span>
-                                    </span>
-                                  ) : isRequired ? (
-                                    <span className="px-2 py-0.5 rounded-[var(--radius-control)] bg-rose-500/15 text-rose-600 font-bold text-[10px] shrink-0 border border-rose-500/30">
-                                      REQUIRED
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded-[var(--radius-control)] bg-amber-500/10 text-amber-700 font-medium text-[10px] shrink-0 border border-amber-500/20">
-                                      Optional
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 border-r border-[var(--color-line)]">
-                                <select
-                                  value={selectedSource}
-                                  onChange={(e) =>
-                                    handleUpdateMapping(targetCol.dbField, e.target.value)
-                                  }
-                                  className="w-full py-2 px-3 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-control)] text-xs font-mono font-semibold text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)] cursor-pointer"
-                                >
-                                  <option value="">-- Pilih Header Kolom Excel --</option>
-                                  {scannedColumns.map((col) => (
-                                    <option key={col} value={col}>
-                                      {col}
-                                      {sheetSamples[col]
-                                        ? ` (ex: ${String(sheetSamples[col]).slice(0, 28)})`
-                                        : ""}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td className="py-3 px-4 border-r border-[var(--color-line)] font-mono text-xs text-[var(--color-ink-body)]">
-                                {sampleVal ? (
-                                  <span className="truncate block max-w-[260px]" title={sampleVal}>
-                                    {sampleVal}
-                                  </span>
-                                ) : (
-                                  <span className="text-[var(--color-ink-faint)] italic">—</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-4">
-                                <span className="font-mono text-xs text-[var(--color-brand)] font-semibold block">
-                                  {targetCol.dbField}
-                                </span>
-                                <span className="font-mono text-[10px] text-[var(--color-ink-muted)]">
-                                  {targetCol.sqlType}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* ── TABLE 2: ALL SCANNED HEADERS CATALOG (Disimpan Lengkap & Tetap Bisa Di-GET) ── */}
-            {(filterMode === "ALL" || filterMode === "EXTRA") && (
-              <div className="space-y-2.5 pt-2">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--color-ink)]">
-                        2. Full Scanned Excel Header Catalog ({scannedColumns.length} Columns Collected)
-                      </h4>
-                      <Badge tone="brand">Queryable via GET /api/master/data &amp; /headers</Badge>
-                    </div>
-                    <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5">
-                      Meskipun hanya {targetSchema.length} kolom inti yang masuk ke tabel utama, <strong>seluruh {scannedColumns.length} kolom beserta datanya</strong> tetap disimpan dan dapat di-GET / ditampilkan di halaman Master Data.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="border border-[var(--color-line)] rounded-[var(--radius-surface)] overflow-x-auto table-scroll shadow-2xs">
-                  <table className="w-full text-left border-collapse font-sans text-xs sm:text-[13px]">
-                    <thead>
-                      <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[var(--color-ink-muted)] text-[11px] uppercase font-bold tracking-wider">
-                        <th className="py-2.5 px-3 w-12 text-center border-r border-[var(--color-line)]">No</th>
-                        <th className="py-2.5 px-4 w-4/12 border-r border-[var(--color-line)]">Scanned Excel Header</th>
-                        <th className="py-2.5 px-4 w-4/12 border-r border-[var(--color-line)]">Sample Row Value</th>
-                        <th className="py-2.5 px-4 w-4/12">Storage &amp; Retrieval Role</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--color-line)] text-[var(--color-ink)]">
-                      {scannedColumns
-                        .filter((col) => {
-                          if (filterMode === "EXTRA" && mappedSourceSet.has(col)) return false;
-                          if (!filterText.trim()) return true;
-                          const q = filterText.toLowerCase();
-                          const sample = String(sheetSamples[col] || "").toLowerCase();
-                          return col.toLowerCase().includes(q) || sample.includes(q);
-                        })
-                        .map((col, idx) => {
-                          const isCore = mappedSourceSet.has(col);
-                          const mappedTargetField = Object.entries(mapping || {}).find(([, src]) =>
-                            String(src || "")
-                              .split("|")
-                              .map((s) => s.trim())
-                              .includes(col)
-                          )?.[0];
-
-                          return (
-                            <tr
-                              key={col}
-                              className="hover:bg-[var(--color-surface-sunken)]/60 transition-colors"
+                          {/* Nama Kolom di File Excel */}
+                          <td className="py-3 px-4 border-r border-[var(--color-line)]">
+                            <span
+                              className={`font-mono font-bold text-xs sm:text-[13px] ${
+                                isMatched ? "text-[var(--color-valid)]" : "text-rose-700"
+                              }`}
                             >
-                              <td className="py-2.5 px-3 text-center font-mono text-xs text-[var(--color-ink-muted)] border-r border-[var(--color-line)]">
-                                {idx + 1}
-                              </td>
-                              <td className="py-2.5 px-4 font-mono font-semibold text-[var(--color-ink)] border-r border-[var(--color-line)]">
-                                {col}
-                              </td>
-                              <td className="py-2.5 px-4 font-mono text-xs text-[var(--color-ink-body)] border-r border-[var(--color-line)]">
-                                {sheetSamples[col] ? (
-                                  <span
-                                    className="truncate block max-w-[320px]"
-                                    title={sheetSamples[col]}
-                                  >
-                                    {sheetSamples[col]}
-                                  </span>
-                                ) : (
-                                  <span className="text-[var(--color-ink-faint)] italic">Empty</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4">
-                                {isCore ? (
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <Badge tone="valid" dot>
-                                      Core DB Column ({mappedTargetField})
-                                    </Badge>
-                                    <span className="text-[11px] text-[var(--color-ink-muted)]">
-                                      + Full Row Store
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <Badge tone="brand" dot>
-                                    Stored in Full Row &amp; Header Catalog (GET Ready)
-                                  </Badge>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+                              {col}
+                            </span>
+                          </td>
+
+                          {/* Contoh Nilai dari Baris Pertama */}
+                          <td className="py-3 px-4 border-r border-[var(--color-line)] font-mono text-xs text-[var(--color-ink-body)]">
+                            {sheetSamples[col] ? (
+                              <span
+                                className="truncate block max-w-[260px]"
+                                title={sheetSamples[col]}
+                              >
+                                {sheetSamples[col]}
+                              </span>
+                            ) : (
+                              <span className="text-[var(--color-ink-faint)] italic">—</span>
+                            )}
+                          </td>
+
+                          {/* Dropdown Pemetaan ke Daftar Kolom Target */}
+                          <td className="py-3 px-4 border-r border-[var(--color-line)]">
+                            <select
+                              value={matchedTarget?.dbField || ""}
+                              onChange={(e) =>
+                                handleAssignExcelColumnToTarget(col, e.target.value)
+                              }
+                              className={`w-full py-1.5 px-2.5 rounded-[var(--radius-control)] text-xs font-semibold border cursor-pointer focus:outline-none ${
+                                isMatched
+                                  ? "bg-[var(--color-surface)] border-[var(--color-valid)] text-[var(--color-valid)]"
+                                  : "bg-[var(--color-surface)] border-rose-300 text-rose-600"
+                              }`}
+                            >
+                              <option value="">— Tidak Cocok (Unmatched) —</option>
+                              {TARGET_SEARCH_COLUMNS.map((t) => (
+                                <option key={t.dbField} value={t.dbField}>
+                                  {t.label} ({t.dbField})
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+
+                          {/* Badge Status Ketemu (Hijau) vs Tidak Ketemu (Merah) */}
+                          <td className="py-3 px-4">
+                            {isMatched ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-control)] bg-[var(--color-valid-soft)] text-[var(--color-valid)] font-bold text-[11px] border border-[var(--color-valid)]/30">
+                                <CheckCircleIcon className="w-3.5 h-3.5 shrink-0" />
+                                <span>KETEMU ({matchedTarget.dbField.toUpperCase()})</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-control)] bg-rose-500/15 text-rose-600 font-bold text-[11px] border border-rose-500/30">
+                                <ExclamationCircleIcon className="w-3.5 h-3.5 shrink-0" />
+                                <span>TIDAK KETEMU</span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* Step 2 Footer Actions */}
@@ -1208,7 +1174,7 @@ export default function ComparePage({ onNavigate }) {
             <Button
               variant="primary"
               icon={ArrowRightIcon}
-              disabled={!isMappingComplete || submitting}
+              disabled={submitting}
               onClick={handleExecuteSave}
             >
               Process &amp; Save Data ({sheetRowCount.toLocaleString("id-ID")} Rows)
@@ -1230,7 +1196,7 @@ export default function ComparePage({ onNavigate }) {
               Processing &amp; Storing Claims Data
             </h2>
             <p className="text-[var(--text-caption)] text-[var(--color-ink-muted)] max-w-md mx-auto">
-              Menyimpan kolom inti ke tabel Master PostgreSQL dan mengarsipkan seluruh {scannedColumns.length} kolom header beserta baris lengkap...
+              Menyimpan data ke tabel Master dan mengarsipkan seluruh {scannedColumns.length} kolom header beserta baris lengkap...
             </p>
           </div>
 
@@ -1310,25 +1276,6 @@ export default function ComparePage({ onNavigate }) {
               </span>
             </div>
           </div>
-
-          {/* Stored Header Summary */}
-          {uploadResult.scanned_headers?.length > 0 && (
-            <div className="p-4 rounded-[var(--radius-control)] bg-[var(--color-surface-sunken)]/60 border border-[var(--color-line)] space-y-2">
-              <div className="text-xs font-bold text-[var(--color-ink)]">
-                Seluruh Header yang Tersimpan &amp; Bisa Di-GET ({uploadResult.scanned_headers.length} Kolom):
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {uploadResult.scanned_headers.map((h) => (
-                  <span
-                    key={h}
-                    className="px-2 py-0.5 rounded text-[11px] font-mono bg-[var(--color-surface)] border border-[var(--color-line)] text-[var(--color-ink-body)]"
-                  >
-                    {h}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="flex items-center justify-between pt-2">
             <Button variant="secondary" onClick={handleResetAll}>

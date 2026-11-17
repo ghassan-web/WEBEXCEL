@@ -192,15 +192,18 @@ def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict
     """
     if not cedant_code:
         return {}
-    rows = db.execute(
-        text(
-            "SELECT m.excel_name, f.field_name, m.argument "
-            "FROM master_upload_column_mapping m "
-            "JOIN master_field f ON f.id = m.field_id "
-            "WHERE m.cedant_code = :cc AND m.is_active = TRUE"
-        ),
-        {"cc": cedant_code},
-    ).mappings().all()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT m.excel_name, f.field_name, m.argument "
+                "FROM master_upload_column_mapping m "
+                "JOIN master_field f ON f.id = m.field_id "
+                "WHERE m.cedant_code = :cc AND m.is_active = TRUE"
+            ),
+            {"cc": cedant_code},
+        ).mappings().all()
+    except Exception:
+        return {}
 
     mapping = {}
     for row in rows:
@@ -235,18 +238,27 @@ def _load_column_mapping(db: Session, cedant_code: str, sheet_name: str) -> dict
 
 @router.get("/mappings", summary="Ambil mapping kolom aktif dari database")
 def get_column_mappings(db: Session = Depends(get_db)):
-    rows = db.execute(
-        text(
-            "SELECT m.cedant_code, "
-            "COALESCE(NULLIF(BTRIM(m.cedant_name), ''), c.cedant_name, m.cedant_code) AS cedant_name, "
-            "m.excel_name, f.field_name, m.argument "
-            "FROM master_upload_column_mapping m "
-            "JOIN master_field f ON f.id = m.field_id "
-            "LEFT JOIN master_oscedant_code c ON c.cedant_code = m.cedant_code "
-            "WHERE m.is_active = TRUE "
-            "ORDER BY cedant_name, m.cedant_code, f.field_name"
-        )
-    ).mappings().all()
+    from ..models.database import DB_MODE, DB_LAST_ERROR
+    try:
+        rows = db.execute(
+            text(
+                "SELECT m.cedant_code, "
+                "COALESCE(NULLIF(BTRIM(m.cedant_name), ''), c.cedant_name, m.cedant_code) AS cedant_name, "
+                "m.excel_name, f.field_name, m.argument "
+                "FROM master_upload_column_mapping m "
+                "JOIN master_field f ON f.id = m.field_id "
+                "LEFT JOIN master_oscedant_code c ON c.cedant_code = m.cedant_code "
+                "WHERE m.is_active = TRUE "
+                "ORDER BY cedant_name, m.cedant_code, f.field_name"
+            )
+        ).mappings().all()
+    except Exception as exc:
+        return {
+            "profiles": [],
+            "db_connected": False,
+            "db_mode": DB_MODE,
+            "db_error": DB_LAST_ERROR or str(exc),
+        }
 
     profiles = {}
     for row in rows:
@@ -392,36 +404,39 @@ def _resolve_cedant_code(db: Session, cedant_name: str) -> Optional[str]:
     if not cedant_name:
         return None
     name = cedant_name.strip()
-    mapping_codes = db.execute(
-        text(
-            "SELECT DISTINCT cedant_code FROM master_upload_column_mapping "
-            "WHERE LOWER(BTRIM(cedant_name)) = LOWER(:name) "
-            "AND is_active = TRUE AND cedant_code IS NOT NULL"
-        ),
-        {"name": name},
-    ).scalars().all()
-    if len(mapping_codes) == 1:
-        return mapping_codes[0]
+    try:
+        mapping_codes = db.execute(
+            text(
+                "SELECT DISTINCT cedant_code FROM master_upload_column_mapping "
+                "WHERE LOWER(BTRIM(cedant_name)) = LOWER(:name) "
+                "AND is_active = TRUE AND cedant_code IS NOT NULL"
+            ),
+            {"name": name},
+        ).scalars().all()
+        if len(mapping_codes) == 1:
+            return mapping_codes[0]
 
-    exact_codes = db.execute(
-        text(
-            "SELECT DISTINCT cedant_code FROM master_oscedant_code "
-            "WHERE LOWER(BTRIM(cedant_name)) = LOWER(:name) "
-            "AND cedant_code IS NOT NULL"
-        ),
-        {"name": name},
-    ).scalars().all()
-    if len(exact_codes) == 1:
-        return exact_codes[0]
+        exact_codes = db.execute(
+            text(
+                "SELECT DISTINCT cedant_code FROM master_oscedant_code "
+                "WHERE LOWER(BTRIM(cedant_name)) = LOWER(:name) "
+                "AND cedant_code IS NOT NULL"
+            ),
+            {"name": name},
+        ).scalars().all()
+        if len(exact_codes) == 1:
+            return exact_codes[0]
 
-    partial_codes = db.execute(
-        text(
-            "SELECT DISTINCT cedant_code FROM master_oscedant_code "
-            "WHERE LOWER(cedant_name) LIKE LOWER(:pattern) AND cedant_code IS NOT NULL"
-        ),
-        {"pattern": f"%{name}%"},
-    ).scalars().all()
-    return partial_codes[0] if len(partial_codes) == 1 else None
+        partial_codes = db.execute(
+            text(
+                "SELECT DISTINCT cedant_code FROM master_oscedant_code "
+                "WHERE LOWER(cedant_name) LIKE LOWER(:pattern) AND cedant_code IS NOT NULL"
+            ),
+            {"pattern": f"%{name}%"},
+        ).scalars().all()
+        return partial_codes[0] if len(partial_codes) == 1 else None
+    except Exception:
+        return name
 
 
 def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
@@ -431,14 +446,17 @@ def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
     if not headers:
         return None, None
 
-    mappings = db.execute(
-        text(
-            "SELECT m.cedant_code, m.cedant_name, m.excel_name, m.argument, f.field_name "
-            "FROM master_upload_column_mapping m "
-            "JOIN master_field f ON f.id = m.field_id "
-            "WHERE m.is_active = TRUE AND m.cedant_code IS NOT NULL"
-        )
-    ).mappings().all()
+    try:
+        mappings = db.execute(
+            text(
+                "SELECT m.cedant_code, m.cedant_name, m.excel_name, m.argument, f.field_name "
+                "FROM master_upload_column_mapping m "
+                "JOIN master_field f ON f.id = m.field_id "
+                "WHERE m.is_active = TRUE AND m.cedant_code IS NOT NULL"
+            )
+        ).mappings().all()
+    except Exception:
+        return None, None
 
     candidates = {}
     for mapping in mappings:
@@ -609,12 +627,16 @@ def _write_cedant_rows(db: Session, rows: list) -> dict:
     doc_nos = [r["doc_no"] for r in rows_with_key]
     existing: dict = {}
     if doc_nos:
-        for row in db.execute(
-            text(
-                "SELECT cedant_code, doc_no, dol, outstanding, currency "
-                "FROM master_os_cedant_web WHERE doc_no = ANY(:dns)"
-            ),
-            {"dns": doc_nos},
+        for row in (
+            db.query(
+                MasterOsCedant.cedant_code,
+                MasterOsCedant.doc_no,
+                MasterOsCedant.dol,
+                MasterOsCedant.outstanding,
+                MasterOsCedant.currency,
+            )
+            .filter(MasterOsCedant.doc_no.in_(doc_nos))
+            .all()
         ):
             key = (row[0] or "", row[1] or "")
             existing.setdefault(key, []).append({
@@ -864,7 +886,12 @@ async def inspect_master_excel(
 
     target_table = _target_table(tipe_data or "OS Cedant")
     is_infopack = target_table == INFOPACK_TABLE
-    resolved_cedant = (cedant_code or "").strip() or _resolve_cedant_code(db, cedant or "") or ""
+    resolved_cedant = (cedant_code or "").strip()
+    if not resolved_cedant and cedant:
+        try:
+            resolved_cedant = _resolve_cedant_code(db, cedant) or ""
+        except Exception:
+            resolved_cedant = ""
     detected_cedant_name = (cedant or "").strip()
 
     # Jika cedant belum dipilih, coba deteksi dari header sheet default atau nama file
@@ -1225,22 +1252,22 @@ def get_master_data(
         params["cedant"] = cedant
     if not is_infopack:
         where.append(
-            "(NULLIF(BTRIM(doc_no), '') IS NOT NULL OR dol IS NOT NULL "
-            "OR outstanding IS NOT NULL OR NULLIF(BTRIM(currency), '') IS NOT NULL)"
+            "(NULLIF(TRIM(doc_no), '') IS NOT NULL OR dol IS NOT NULL "
+            "OR outstanding IS NOT NULL OR NULLIF(TRIM(currency), '') IS NOT NULL)"
         )
     if search and search.strip():
         params["q"] = f"%{search.strip()}%"
         if is_infopack:
             where.append(
-                "(COALESCE(cedant_code, '') ILIKE :q OR COALESCE(class_code, '') ILIKE :q "
-                "OR COALESCE(title, '') ILIKE :q OR COALESCE(value, '') ILIKE :q "
-                "OR COALESCE(sheet_name, '') ILIKE :q)"
+                "(LOWER(COALESCE(cedant_code, '')) LIKE LOWER(:q) OR LOWER(COALESCE(class_code, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(title, '')) LIKE LOWER(:q) OR LOWER(COALESCE(value, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(sheet_name, '')) LIKE LOWER(:q))"
             )
         else:
             where.append(
-                "(COALESCE(cedant_code, '') ILIKE :q OR COALESCE(doc_no, '') ILIKE :q "
-                "OR COALESCE(currency, '') ILIKE :q OR COALESCE(sheet_name, '') ILIKE :q "
-                "OR CAST(COALESCE(outstanding, 0) AS TEXT) ILIKE :q)"
+                "(LOWER(COALESCE(cedant_code, '')) LIKE LOWER(:q) OR LOWER(COALESCE(doc_no, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(currency, '')) LIKE LOWER(:q) OR LOWER(COALESCE(sheet_name, '')) LIKE LOWER(:q) "
+                "OR LOWER(CAST(COALESCE(outstanding, 0) AS TEXT)) LIKE LOWER(:q))"
             )
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
@@ -1304,7 +1331,7 @@ def get_master_data(
     result_rows = []
     for r in rows:
         dol_val = r.get("dol")
-        dol_str = dol_val.strftime("%Y-%m-%d") if dol_val else ""
+        dol_str = dol_val.strftime("%Y-%m-%d") if hasattr(dol_val, "strftime") else str(dol_val or "")
         cc_val = r.get("cedant_code") or ""
         sh_val = r.get("sheet_name") or ""
         if is_infopack:

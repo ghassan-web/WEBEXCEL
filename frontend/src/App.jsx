@@ -1,18 +1,18 @@
-import { useState } from "react";
-import Sidebar from "./components/Sidebar";
-import OverviewPage    from "./pages/OverviewPage";
-import ComparePage     from "./pages/ComparePage";
+import { useState, useCallback } from "react";
+import { MainLayout } from "./components/layout";
+import OverviewPage     from "./pages/OverviewPage";
+import ComparePage      from "./pages/ComparePage";
 import MappingRulesPage from "./pages/MappingRulesPage";
-import MasterPage      from "./pages/MasterPage";
-import OSCLNPage       from "./pages/OSCLNPage";
-import HistoryPage     from "./pages/HistoryPage";
-import LibraryPage     from "./pages/LibraryPage";
+import MasterPage       from "./pages/MasterPage";
+import OSCLNPage        from "./pages/OSCLNPage";
+import HistoryPage      from "./pages/HistoryPage";
+import LibraryPage      from "./pages/LibraryPage";
 
 export default function App() {
-  const [page,    setPage]    = useState("overview");
-  const [libTab,  setLibTab]  = useState("os");
+  const [page,   setPage]   = useState("overview");
+  const [libTab, setLibTab] = useState("os");
 
-  const navigateTo = (key) => {
+  const navigateTo = useCallback((key) => {
     if (key === "library_os") {
       setLibTab("os");
       setPage("library");
@@ -22,7 +22,7 @@ export default function App() {
     } else {
       setPage(key);
     }
-  };
+  }, []);
 
   function renderPage() {
     switch (page) {
@@ -38,11 +38,8 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar activePage={page} onNavigate={navigateTo} />
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {renderPage()}
-      </div>
-    </div>
+    <MainLayout activePage={page} onNavigate={navigateTo}>
+      {renderPage()}
+    </MainLayout>
   );
 }

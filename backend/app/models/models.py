@@ -148,3 +148,49 @@ class OsclnRow(Base):
     primary_key_value = Column(String(500), nullable=False)
     row_data          = Column(Text,        nullable=False)
     created_at        = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ─────────────────────────────────────────────────────────────
+# Scanned Excel Header Catalog & Full Raw Row Store
+# ─────────────────────────────────────────────────────────────
+
+class ScannedSchema(Base):
+    """Menyimpan seluruh header kolom hasil scan dari file Excel yang diupload."""
+    __tablename__ = "master_scanned_schemas"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    job_id           = Column(Integer, nullable=True, index=True)
+    session_id       = Column(String(36), nullable=True, index=True)
+    cedant_code      = Column(String(50), nullable=True, index=True)
+    cedant_name      = Column(String(255), nullable=True)
+    tipe_data        = Column(String(50), nullable=False)
+    bulan            = Column(String(2), nullable=True)
+    tahun            = Column(String(4), nullable=True)
+    file_name        = Column(String(255), nullable=False)
+    sheet_name       = Column(String(255), nullable=True)
+    scanned_headers  = Column(Text, nullable=False, comment="JSON array seluruh kolom di file Excel")
+    column_mapping   = Column(Text, nullable=True, comment="JSON dict mapping ke kolom inti DB")
+    unmapped_headers = Column(Text, nullable=True, comment="JSON array kolom tambahan di luar kolom inti DB")
+    sample_row       = Column(Text, nullable=True, comment="JSON dict contoh baris pertama")
+    total_columns    = Column(Integer, nullable=True)
+    total_rows       = Column(Integer, nullable=True)
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MasterRawRow(Base):
+    """Menyimpan seluruh kolom asli per baris dari file Excel agar semua kolom tetap bisa di-GET."""
+    __tablename__ = "master_raw_rows"
+
+    id                = Column(BigInteger, primary_key=True, autoincrement=True)
+    job_id            = Column(Integer, nullable=True, index=True)
+    session_id        = Column(String(36), nullable=True, index=True)
+    target_table      = Column(String(50), nullable=False, index=True)
+    cedant_code       = Column(String(50), nullable=True, index=True)
+    primary_key_value = Column(String(500), nullable=True, index=True)
+    month             = Column(Integer, nullable=True)
+    year              = Column(Integer, nullable=True)
+    file_name         = Column(Text, nullable=True)
+    sheet_name        = Column(Text, nullable=True)
+    full_row_data     = Column(Text, nullable=False, comment="JSON dict seluruh kolom asli dari baris Excel")
+    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+

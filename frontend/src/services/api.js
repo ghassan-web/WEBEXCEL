@@ -161,16 +161,39 @@ export async function getColumnMappings() {
   return handleResponse(res);
 }
 
+/** POST /api/master/inspect — scan sheets, headers, samples, and auto-mapping */
+export async function inspectMasterFile(formData) {
+  const res = await fetch(`${BASE_URL}/api/master/inspect`, {
+    method: "POST",
+    headers: sessionHeaders(),
+    body: formData,
+  });
+  return handleResponse(res);
+}
+
 /** POST /api/master/upload */
 export async function uploadToMaster(formData, onProgress) {
   return xhrUpload(`${BASE_URL}/api/master/upload`, formData, onProgress);
 }
 
+/** GET /api/master/headers — ambil katalog seluruh header Excel yang pernah di-scan */
+export async function getScannedHeaders(tipeData, cedant) {
+  const params = new URLSearchParams();
+  if (tipeData) params.append("tipe_data", tipeData);
+  if (cedant)   params.append("cedant", cedant);
+  const res = await fetch(
+    `${BASE_URL}/api/master/headers?${params}`,
+    { headers: sessionHeaders() },
+  );
+  return handleResponse(res);
+}
+
 /** GET /api/master/data */
-export async function getMasterData(tipeData, { cedant, skip = 0, limit = 50 } = {}) {
+export async function getMasterData(tipeData, { cedant, search, skip = 0, limit = 50 } = {}) {
   const params = new URLSearchParams({ skip, limit });
   if (tipeData) params.append("tipe_data", tipeData);
   if (cedant)   params.append("cedant", cedant);
+  if (search)   params.append("search", search);
   const res = await fetch(
     `${BASE_URL}/api/master/data?${params}`,
     { headers: sessionHeaders() },

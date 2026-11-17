@@ -20,8 +20,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..models import get_db, get_session_id, UploadJob, MasterOsCedant, MasterOsInfopack
-from ..services.excel_service import ingest_excel, ingest_kbins, KBINS_TIPE_DATA
+from ..models import (
+    get_db, get_session_id,
+    UploadJob, MasterOsCedant, MasterOsInfopack,
+    ScannedSchema, MasterRawRow,
+)
+from ..services.excel_service import (
+    ingest_excel, ingest_kbins, inspect_excel_workbook, KBINS_TIPE_DATA,
+)
 
 router = APIRouter(prefix="/api/master", tags=["master"])
 logger = logging.getLogger(__name__)
@@ -701,11 +707,211 @@ def _write_infopack_rows(db: Session, rows: list) -> dict:
     return {"inserted": inserted, "skipped": 0, "updated": 0}
 
 
+CEDANT_TARGET_SCHEMA = [
+    {
+        "dbField": "doc_no",
+        "label": "Loss Ref / Document No",
+        "required": True,
+        "sqlType": "VARCHAR(255)",
+        "description": "Nomor dokumen / referensi klaim utama (Primary Key)",
+    },
+    {
+        "dbField": "outstanding",
+        "label": "Outstanding Claim (Net OS)",
+        "required": True,
+        "sqlType": "NUMERIC(30, 2)",
+        "description": "Nilai nominal cadangan klaim outstanding",
+    },
+    {
+        "dbField": "dol",
+        "label": "Date of Loss (DOL)",
+        "required": False,
+        "sqlType": "DATE",
+        "description": "Tanggal terjadinya kerugian / klaim",
+    },
+    {
+        "dbField": "currency",
+        "label": "Currency (Mata Uang)",
+        "required": False,
+        "sqlType": "VARCHAR(10)",
+        "description": "Kode mata uang klaim (IDR, USD, dll.)",
+    },
+]
+
+INFOPACK_TARGET_SCHEMA = [
+    {
+        "dbField": "class_code",
+        "label": "Class Code (COB)",
+        "required": False,
+        "sqlType": "VARCHAR(50)",
+        "description": "Kode lini bisnis / Class of Business",
+    },
+    {
+        "dbField": "title",
+        "label": "Title / Insured / Uraian",
+        "required": True,
+        "sqlType": "TEXT",
+        "description": "Nama tertanggung atau judul baris InfoPack",
+    },
+    {
+        "dbField": "value",
+        "label": "Value / Gross Amount",
+        "required": True,
+        "sqlType": "TEXT",
+        "description": "Nilai angka / nominal pada laporan InfoPack",
+    },
+]
+
+
+def _match_header_by_patterns(columns: list[str], patterns: tuple) -> str:
+    for pat in patterns:
+        for col in columns:
+            if re.search(pat, str(col).strip(), re.IGNORECASE):
+                return str(col)
+    return ""
+
+
+def _auto_match_headers_for_sheet(
+    columns: list[str],
+    is_infopack: bool,
+    db_col_map: dict,
+) -> dict:
+    """
+    Petakan daftar nama kolom Excel (`columns`) ke field utama DB.
+    Prioritas:
+    1. Mapping aktif dari tabel `master_upload_column_mapping` (`db_col_map`)
+    2. Regex fallback patterns
+    """
+    lower_lookup = {str(c).strip().lower(): str(c) for c in columns}
+    matched: dict[str, str] = {}
+
+    # 1. Coba dari db_col_map terlebih dahulu
+    for field_name, excel_col in (db_col_map or {}).items():
+        if not excel_col:
+            continue
+        if "|" in str(excel_col):
+            parts = [p.strip() for p in str(excel_col).split("|") if p.strip()]
+            resolved_parts = [lower_lookup.get(p.lower(), "") for p in parts]
+            if all(resolved_parts):
+                matched[field_name] = "|".join(resolved_parts)
+        else:
+            found = lower_lookup.get(str(excel_col).strip().lower())
+            if found:
+                matched[field_name] = found
+
+    # 2. Fallback regex untuk field yang belum terpetakan
+    if is_infopack:
+        if not matched.get("class_code"):
+            m = _match_header_by_patterns(columns, CLASS_CODE_PATTERNS)
+            if m:
+                matched["class_code"] = m
+        if not matched.get("title"):
+            m = _match_header_by_patterns(columns, INSURED_PATTERNS + (r"title|uraian|description|nama",))
+            if m:
+                matched["title"] = m
+        if not matched.get("value"):
+            m = _match_header_by_patterns(columns, VALUE_PATTERNS + OUTSTANDING_PATTERNS)
+            if m:
+                matched["value"] = m
+    else:
+        if not matched.get("doc_no"):
+            m = _match_header_by_patterns(columns, (r"^DocNo$", r"^Doc No$", r"^Loss Ref$",) + DOC_NO_PATTERNS)
+            if m:
+                matched["doc_no"] = m
+        if not matched.get("outstanding"):
+            m = _match_header_by_patterns(columns, OUTSTANDING_PATTERNS)
+            if m:
+                matched["outstanding"] = m
+        if not matched.get("dol"):
+            m = _match_header_by_patterns(columns, DOL_PATTERNS)
+            if m:
+                matched["dol"] = m
+        if not matched.get("currency"):
+            m = _match_header_by_patterns(columns, CURRENCY_PATTERNS)
+            if m:
+                matched["currency"] = m
+
+    return matched
+
+
+# ═══════════════════════════════════════════════════════════
+# POST /api/master/inspect
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/inspect", summary="Scan sheet dan seluruh header kolom dari file Excel sebelum disimpan")
+async def inspect_master_excel(
+    tipe_data:   Optional[str] = Form("OS Cedant"),
+    cedant:      Optional[str] = Form(None),
+    cedant_code: Optional[str] = Form(None),
+    file:        UploadFile    = File(...),
+    db:          Session       = Depends(get_db),
+    session_id:  str           = Depends(get_session_id),
+):
+    if not file.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
+        raise HTTPException(status_code=400, detail="File harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
+
+    file_bytes = await file.read()
+    if len(file_bytes) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File melebihi batas 50 MB")
+
+    try:
+        info = inspect_excel_workbook(file_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.exception("Failed to inspect Excel workbook")
+        raise HTTPException(status_code=500, detail=f"Gagal memindai struktur file Excel: {e}")
+
+    target_table = _target_table(tipe_data or "OS Cedant")
+    is_infopack = target_table == INFOPACK_TABLE
+    resolved_cedant = (cedant_code or "").strip() or _resolve_cedant_code(db, cedant or "") or ""
+    detected_cedant_name = (cedant or "").strip()
+
+    # Jika cedant belum dipilih, coba deteksi dari header sheet default atau nama file
+    default_sheet = info.get("default_sheet") or ""
+    default_cols = info.get("sheet_columns", {}).get(default_sheet, [])
+    if not resolved_cedant and default_cols:
+        dummy_rows = [{"pk": "", "data": {c: "1" for c in default_cols}}]
+        try:
+            det_code, det_name = _detect_cedant_from_mapping(db, dummy_rows, default_sheet)
+            if det_code:
+                resolved_cedant = det_code
+                detected_cedant_name = det_name or detected_cedant_name
+        except Exception:
+            pass
+
+    auto_mappings: dict[str, dict] = {}
+    for sh, cols in (info.get("sheet_columns") or {}).items():
+        db_col_map = {}
+        if resolved_cedant:
+            try:
+                db_col_map = _load_column_mapping(db, resolved_cedant, sh)
+            except Exception:
+                db_col_map = {}
+        auto_mappings[sh] = _auto_match_headers_for_sheet(cols, is_infopack, db_col_map)
+
+    return {
+        "status": "success",
+        "file_name": file.filename,
+        "detected_file_tag": _detect_file_name(file.filename),
+        "cedant_code": resolved_cedant or None,
+        "cedant_name": detected_cedant_name or None,
+        "tipe_data": "Infopack" if is_infopack else "OS Cedant",
+        "available_sheets": info["available_sheets"],
+        "default_sheet": info["default_sheet"],
+        "sheet_columns": info["sheet_columns"],
+        "sheet_samples": info["sheet_samples"],
+        "sheet_row_counts": info["sheet_row_counts"],
+        "auto_mappings": auto_mappings,
+        "target_schema": INFOPACK_TARGET_SCHEMA if is_infopack else CEDANT_TARGET_SCHEMA,
+    }
+
+
 # ═══════════════════════════════════════════════════════════
 # POST /api/master/upload
 # ═══════════════════════════════════════════════════════════
 
-@router.post("/upload", summary="Unggah satu file Excel dan append ke Master")
+@router.post("/upload", summary="Unggah satu file Excel, simpan seluruh header & baris lengkap, serta append kolom inti ke Master")
 async def upload_to_master(
     bulan:           str           = Form(...),
     tahun:           str           = Form(...),
@@ -714,6 +920,7 @@ async def upload_to_master(
     cedant:          Optional[str] = Form(None),
     cedant_code:     Optional[str] = Form(None),
     sheet_name:      Optional[str] = Form(None),
+    custom_mapping:  Optional[str] = Form(None),
     file:            UploadFile    = File(...),
     db:              Session       = Depends(get_db),
     session_id:      str           = Depends(get_session_id),
@@ -725,7 +932,21 @@ async def upload_to_master(
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File melebihi batas 50 MB")
 
-    pk_col = (primary_key_col or "").strip() or None
+    parsed_custom_map: dict = {}
+    if custom_mapping:
+        try:
+            raw_cm = json.loads(custom_mapping)
+            if isinstance(raw_cm, dict):
+                parsed_custom_map = {str(k): str(v).strip() for k, v in raw_cm.items() if v and str(v).strip()}
+        except Exception:
+            parsed_custom_map = {}
+
+    pk_col = (
+        (primary_key_col or "").strip()
+        or parsed_custom_map.get("doc_no")
+        or parsed_custom_map.get("title")
+        or None
+    )
     # Gunakan cedant_code dari frontend jika ada, fallback ke lookup DB
     resolved_cedant = (cedant_code or "").strip() or _resolve_cedant_code(db, cedant or "") or ""
     target_table = _target_table(tipe_data)
@@ -780,12 +1001,19 @@ async def upload_to_master(
     db.commit()
 
     detected_name = _detect_file_name(file.filename)
+    scanned_headers = result.get("columns") or (
+        list(result["rows"][0]["data"].keys()) if result.get("rows") and result["rows"][0].get("data") else []
+    )
+
+    db_col_map = _load_column_mapping(db, resolved_cedant, sheet_val) if resolved_cedant else {}
+    effective_col_map = {**db_col_map, **parsed_custom_map}
+    if not effective_col_map and scanned_headers:
+        effective_col_map = _auto_match_headers_for_sheet(scanned_headers, is_infopack, {})
 
     if is_infopack:
-        col_map = _load_column_mapping(db, resolved_cedant, sheet_val) if resolved_cedant else {}
         rows_to_write = [
             _extract_infopack_row(
-                r, resolved_cedant, bulan, tahun, detected_name, sheet_val, idx, col_map
+                r, resolved_cedant, bulan, tahun, detected_name, sheet_val, idx, effective_col_map
             )
             for idx, r in enumerate(result["rows"])
             if r.get("data")
@@ -794,23 +1022,84 @@ async def upload_to_master(
                          if row.get("class_code") or row.get("title") or row.get("value")]
         stats = _write_infopack_rows(db, rows_to_write)
     else:
-        # Load column mapping dari DB jika ada cedant_code
-        col_map = _load_column_mapping(db, resolved_cedant, sheet_val) if resolved_cedant else {}
-
-        if col_map:
-            logger.info("Using DB column mapping for %s sheet=%s: %s", resolved_cedant, sheet_val, col_map)
+        if effective_col_map:
+            logger.info("Using column mapping for %s sheet=%s: %s", resolved_cedant, sheet_val, effective_col_map)
             rows_to_write = [
-                _extract_cedant_row_with_mapping(r, resolved_cedant, bulan, tahun, detected_name, sheet_val, col_map)
+                _extract_cedant_row_with_mapping(r, resolved_cedant, bulan, tahun, detected_name, sheet_val, effective_col_map)
                 for r in result["rows"]
             ]
         else:
-            # Fallback ke pattern matching
             rows_to_write = [
                 _extract_cedant_row(r, resolved_cedant, bulan, tahun, detected_name, sheet_val)
                 for r in result["rows"]
             ]
 
         stats = _write_cedant_rows(db, rows_to_write)
+
+    # ── Simpan Scanned Schema (seluruh header Excel) & Raw Rows (seluruh kolom per baris) ──
+    mapped_excel_cols = set()
+    for v in (effective_col_map or {}).values():
+        if v:
+            for part in str(v).split("|"):
+                if part.strip():
+                    mapped_excel_cols.add(part.strip())
+    unmapped_headers = [h for h in scanned_headers if h not in mapped_excel_cols]
+    sample_row_data = result["rows"][0]["data"] if result.get("rows") else {}
+
+    try:
+        schema_entry = ScannedSchema(
+            job_id=job.id,
+            session_id=session_id,
+            cedant_code=resolved_cedant or None,
+            cedant_name=job.cedant or cedant or None,
+            tipe_data="Infopack" if is_infopack else "OS Cedant",
+            bulan=str(bulan),
+            tahun=str(tahun),
+            file_name=detected_name,
+            sheet_name=sheet_val,
+            scanned_headers=json.dumps(scanned_headers, ensure_ascii=False),
+            column_mapping=json.dumps(effective_col_map, ensure_ascii=False),
+            unmapped_headers=json.dumps(unmapped_headers, ensure_ascii=False),
+            sample_row=json.dumps(sample_row_data, ensure_ascii=False),
+            total_columns=len(scanned_headers),
+            total_rows=result["total_rows"],
+        )
+        db.add(schema_entry)
+
+        month_int = int(bulan) if str(bulan).isdigit() else None
+        year_int = int(tahun) if str(tahun).isdigit() else None
+        raw_objects = []
+        for idx, r in enumerate(result.get("rows", [])):
+            row_dict = r.get("data") or {}
+            if not row_dict:
+                continue
+            pk_val = str(r.get("pk") or "").strip()
+            if idx < len(rows_to_write):
+                pk_val = (
+                    rows_to_write[idx].get("doc_no")
+                    or rows_to_write[idx].get("title")
+                    or pk_val
+                )
+            raw_objects.append(
+                MasterRawRow(
+                    job_id=job.id,
+                    session_id=session_id,
+                    target_table=target_table,
+                    cedant_code=resolved_cedant or None,
+                    primary_key_value=str(pk_val) if pk_val else None,
+                    month=month_int,
+                    year=year_int,
+                    file_name=detected_name,
+                    sheet_name=sheet_val,
+                    full_row_data=json.dumps(row_dict, ensure_ascii=False),
+                )
+            )
+        if raw_objects:
+            db.bulk_save_objects(raw_objects)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Could not persist ScannedSchema / MasterRawRow: %s", e)
 
     job.status = "done"
     job.total_rows    = result["total_rows"]
@@ -819,15 +1108,97 @@ async def upload_to_master(
     db.commit()
 
     return {
-        "job_id": job.id, "sheet": sheet_val, "target_table": target_table,
+        "job_id": job.id,
+        "sheet": sheet_val,
+        "target_table": target_table,
         "cedant_code": resolved_cedant or None,
-        "file_name": detected_name, "total_rows": result["total_rows"],
-        "rows_appended": stats["inserted"], "rows_skipped": stats["skipped"],
+        "file_name": detected_name,
+        "total_rows": result["total_rows"],
+        "rows_appended": stats["inserted"],
+        "rows_skipped": stats["skipped"],
         "rows_updated": stats["updated"],
+        "total_columns": len(scanned_headers),
+        "scanned_headers": scanned_headers,
+        "column_mapping": effective_col_map,
+        "unmapped_headers": unmapped_headers,
         "message": (
             f"Upload berhasil. {stats['inserted']} baris ditambahkan, "
-            f"{stats['updated']} baris dilengkapi, {stats['skipped']} dilewati."
+            f"{stats['updated']} baris dilengkapi, {stats['skipped']} dilewati. "
+            f"({len(scanned_headers)} kolom header disimpan)."
         ),
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+# GET /api/master/headers
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/headers", summary="Ambil katalog seluruh header Excel yang sudah di-scan dan dikumpulkan")
+def get_scanned_headers(
+    tipe_data:  Optional[str] = Query(None),
+    cedant:     Optional[str] = Query(None),
+    db:         Session       = Depends(get_db),
+    session_id: str           = Depends(get_session_id),
+):
+    q = db.query(ScannedSchema)
+    if tipe_data:
+        is_info = _target_table(tipe_data) == INFOPACK_TABLE
+        q = q.filter(ScannedSchema.tipe_data == ("Infopack" if is_info else "OS Cedant"))
+    if cedant:
+        q = q.filter(ScannedSchema.cedant_code == cedant)
+
+    schemas = q.order_by(ScannedSchema.id.desc()).limit(100).all()
+
+    collected_headers: list[str] = []
+    seen_headers: set[str] = set()
+    schema_list = []
+
+    for s in schemas:
+        try:
+            hdrs = json.loads(s.scanned_headers) if s.scanned_headers else []
+        except Exception:
+            hdrs = []
+        try:
+            col_map = json.loads(s.column_mapping) if s.column_mapping else {}
+        except Exception:
+            col_map = {}
+        try:
+            unmapped = json.loads(s.unmapped_headers) if s.unmapped_headers else []
+        except Exception:
+            unmapped = []
+        try:
+            sample = json.loads(s.sample_row) if s.sample_row else {}
+        except Exception:
+            sample = {}
+
+        for h in hdrs:
+            if h and h not in seen_headers:
+                seen_headers.add(h)
+                collected_headers.append(h)
+
+        schema_list.append({
+            "id": s.id,
+            "job_id": s.job_id,
+            "cedant_code": s.cedant_code,
+            "cedant_name": s.cedant_name,
+            "tipe_data": s.tipe_data,
+            "bulan": s.bulan,
+            "tahun": s.tahun,
+            "file_name": s.file_name,
+            "sheet_name": s.sheet_name,
+            "scanned_headers": hdrs,
+            "column_mapping": col_map,
+            "unmapped_headers": unmapped,
+            "sample_row": sample,
+            "total_columns": s.total_columns,
+            "total_rows": s.total_rows,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        })
+
+    return {
+        "total_schemas": len(schema_list),
+        "collected_headers": collected_headers,
+        "schemas": schema_list,
     }
 
 
@@ -835,10 +1206,11 @@ async def upload_to_master(
 # GET /api/master/data
 # ═══════════════════════════════════════════════════════════
 
-@router.get("/data", summary="Ambil data Master (paginated)")
+@router.get("/data", summary="Ambil data Master beserta seluruh kolom hasil scan (paginated)")
 def get_master_data(
     tipe_data:  Optional[str] = Query(None),
     cedant:     Optional[str] = Query(None),
+    search:     Optional[str] = Query(None),
     skip:       int           = Query(0,  ge=0),
     limit:      int           = Query(50, ge=1, le=500),
     db:         Session       = Depends(get_db),
@@ -856,6 +1228,20 @@ def get_master_data(
             "(NULLIF(BTRIM(doc_no), '') IS NOT NULL OR dol IS NOT NULL "
             "OR outstanding IS NOT NULL OR NULLIF(BTRIM(currency), '') IS NOT NULL)"
         )
+    if search and search.strip():
+        params["q"] = f"%{search.strip()}%"
+        if is_infopack:
+            where.append(
+                "(COALESCE(cedant_code, '') ILIKE :q OR COALESCE(class_code, '') ILIKE :q "
+                "OR COALESCE(title, '') ILIKE :q OR COALESCE(value, '') ILIKE :q "
+                "OR COALESCE(sheet_name, '') ILIKE :q)"
+            )
+        else:
+            where.append(
+                "(COALESCE(cedant_code, '') ILIKE :q OR COALESCE(doc_no, '') ILIKE :q "
+                "OR COALESCE(currency, '') ILIKE :q OR COALESCE(sheet_name, '') ILIKE :q "
+                "OR CAST(COALESCE(outstanding, 0) AS TEXT) ILIKE :q)"
+            )
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     total = db.execute(text(f"SELECT COUNT(*) FROM {table}{where_sql}"), params).scalar() or 0
@@ -864,46 +1250,120 @@ def get_master_data(
         {**params, "lim": limit, "off": skip},
     ).mappings().all()
 
+    # ── Perkaya dengan full_row_data (seluruh kolom Excel asli) dari master_raw_rows ──
+    raw_lookup: dict[tuple, dict] = {}
+    scanned_headers: list[str] = []
+    seen_hdrs: set[str] = set()
+
+    try:
+        schema_q = db.query(ScannedSchema).filter(
+            ScannedSchema.tipe_data == ("Infopack" if is_infopack else "OS Cedant")
+        )
+        if cedant:
+            schema_q = schema_q.filter(ScannedSchema.cedant_code == cedant)
+        for sc in schema_q.order_by(ScannedSchema.id.desc()).limit(30).all():
+            for h in (json.loads(sc.scanned_headers) if sc.scanned_headers else []):
+                if h and h not in seen_hdrs:
+                    seen_hdrs.add(h)
+                    scanned_headers.append(h)
+
+        pks = [
+            str((r.get("title") if is_infopack else r.get("doc_no")) or "").strip()
+            for r in rows
+            if (r.get("title") if is_infopack else r.get("doc_no"))
+        ]
+        if pks:
+            raw_matches = (
+                db.query(MasterRawRow)
+                .filter(
+                    MasterRawRow.target_table == table,
+                    MasterRawRow.primary_key_value.in_(pks),
+                )
+                .order_by(MasterRawRow.id.desc())
+                .all()
+            )
+            for rm in raw_matches:
+                key_specific = (rm.cedant_code or "", rm.primary_key_value or "", rm.sheet_name or "")
+                key_fallback = (rm.cedant_code or "", rm.primary_key_value or "")
+                try:
+                    parsed_full = json.loads(rm.full_row_data) if rm.full_row_data else {}
+                except Exception:
+                    parsed_full = {}
+                if parsed_full:
+                    for h in parsed_full.keys():
+                        if h and h not in seen_hdrs:
+                            seen_hdrs.add(h)
+                            scanned_headers.append(h)
+                    if key_specific not in raw_lookup:
+                        raw_lookup[key_specific] = parsed_full
+                    if key_fallback not in raw_lookup:
+                        raw_lookup[key_fallback] = parsed_full
+    except Exception as e:
+        logger.warning("Could not enrich rows from master_raw_rows: %s", e)
+
     result_rows = []
     for r in rows:
         dol_val = r.get("dol")
         dol_str = dol_val.strftime("%Y-%m-%d") if dol_val else ""
+        cc_val = r.get("cedant_code") or ""
+        sh_val = r.get("sheet_name") or ""
         if is_infopack:
+            pk_val = r.get("title") or str(r.get("id"))
+            full_cols = (
+                raw_lookup.get((cc_val, str(pk_val).strip(), sh_val))
+                or raw_lookup.get((cc_val, str(pk_val).strip()))
+                or {}
+            )
+            base_row_data = {
+                **full_cols,
+                "cedant_code": r.get("cedant_code"), "class_code": r.get("class_code"),
+                "title": r.get("title"), "value": r.get("value"),
+                "row_index": r.get("row_index"), "month": r.get("month"), "year": r.get("year"),
+                "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
+                "_cedant": r.get("cedant_code"),
+            }
             result_rows.append({
                 "id": r.get("id"), "tipe_data": "Infopack",
                 "bulan": str(r.get("month") or ""), "tahun": str(r.get("year") or ""),
                 "cedant": r.get("cedant_code"),
-                "primary_key_value": r.get("title") or str(r.get("id")),
+                "primary_key_value": pk_val,
                 "source_job_id": None, "sheet_name": r.get("sheet_name"),
-                "row_data": {
-                    "cedant_code": r.get("cedant_code"), "class_code": r.get("class_code"),
-                    "title": r.get("title"), "value": r.get("value"),
-                    "row_index": r.get("row_index"), "month": r.get("month"), "year": r.get("year"),
-                    "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
-                    "_cedant": r.get("cedant_code"),
-                },
+                "row_data": base_row_data,
+                "full_row_data": full_cols,
                 "created_at": None,
             })
         else:
             doc_no = r.get("doc_no")
             outstanding = r.get("outstanding")
+            full_cols = (
+                raw_lookup.get((cc_val, str(doc_no or "").strip(), sh_val))
+                or raw_lookup.get((cc_val, str(doc_no or "").strip()))
+                or {}
+            )
+            base_row_data = {
+                **full_cols,
+                "doc_no": doc_no, "dol": dol_str,
+                "outstanding": str(outstanding) if outstanding is not None else "",
+                "currency": r.get("currency"),
+                "month": r.get("month"), "year": r.get("year"),
+                "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
+                "_cedant": r.get("cedant_code"),
+            }
             result_rows.append({
                 "id": r.get("id"), "tipe_data": "OS Cedant",
                 "bulan": str(r.get("month") or ""), "tahun": str(r.get("year") or ""),
                 "cedant": r.get("cedant_code"),
                 "primary_key_value": doc_no,
                 "source_job_id": None, "sheet_name": r.get("sheet_name"),
-                "row_data": {
-                    "doc_no": doc_no, "dol": dol_str,
-                    "outstanding": str(outstanding) if outstanding is not None else "",
-                    "currency": r.get("currency"),
-                    "month": r.get("month"), "year": r.get("year"),
-                    "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
-                    "_cedant": r.get("cedant_code"),
-                },
+                "row_data": base_row_data,
+                "full_row_data": full_cols,
                 "created_at": None,
             })
-    return {"total": total, "rows": result_rows}
+    return {
+        "total": total,
+        "scanned_headers": scanned_headers,
+        "rows": result_rows,
+    }
 
 
 # ═══════════════════════════════════════════════════════════
@@ -963,6 +1423,12 @@ def delete_library_entry(
             ).rowcount or 0
         except Exception as e:
             logger.warning("Could not delete from %s: %s", table, e)
+
+    try:
+        db.query(ScannedSchema).filter(ScannedSchema.job_id == job_id).delete(synchronize_session=False)
+        db.query(MasterRawRow).filter(MasterRawRow.job_id == job_id).delete(synchronize_session=False)
+    except Exception as e:
+        logger.warning("Could not delete ScannedSchema / MasterRawRow for job %s: %s", job_id, e)
 
     db.delete(job)
     db.commit()

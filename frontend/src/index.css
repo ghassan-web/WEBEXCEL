@@ -1,74 +1,251 @@
-/* ── Google Fonts ── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* ── Google Fonts (Plus Jakarta Sans & Inter — Indonesia Re UI Standard) ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── Explicit :root Light Mode Design Tokens (from indonesiare-frontend) ── */
+:root {
+  --color-canvas:          #F5F6F8;
+  --color-surface:         #FFFFFF;
+  --color-surface-sunken:  #F8FAFC;
+  --color-line:            #E5E8EE;
+  --color-line-strong:     #CBD2DF;
+
+  --color-ink:             #0F172A;
+  --color-body:            #334155;
+  --color-ink-body:        #334155;
+  --color-muted:           #64748B;
+  --color-ink-muted:       #64748B;
+  --color-faint:           #94A3B8;
+  --color-ink-faint:       #94A3B8;
+
+  --color-ink-solid:       #111827;
+  --color-ink-solid-hover: #1F2937;
+  --color-on-ink-solid:    #FFFFFF;
+
+  --color-brand:           #0664D0;
+  --color-brand-hover:     #0556B5;
+  --color-brand-active:    #044899;
+  --color-brand-soft:      #EFF6FF;
+  --color-brand-line:      #BFDBFE;
+  --color-on-brand:        #FFFFFF;
+
+  --color-mark-navy:       #194E82;
+  --color-mark-red:        #ED1B34;
+  --color-mark-green:      #46A748;
+
+  --color-valid:           #059669;
+  --color-success:         #059669;
+  --color-valid-soft:      #ECFDF5;
+  --color-success-soft:    #ECFDF5;
+  --color-warning:         #D97706;
+  --color-warning-soft:    #FEF3C7;
+  --color-danger:          #DC2626;
+  --color-danger-soft:     #FEF2F2;
+  --color-info:            #0664D0;
+
+  --color-premi:           #0556B5;
+  --color-premi-soft:      #EBF3FC;
+  --color-premi-line:      #B9D7F8;
+  --color-claim:           #17365D;
+  --color-claim-soft:      #E8EEF5;
+  --color-claim-line:      #A8BFD8;
+
+  --text-caption:          0.75rem;     /* 12px */
+  --text-body-sm:          0.8125rem;   /* 13px */
+  --text-body:             0.875rem;    /* 14px */
+  --text-body-lg:          0.9375rem;   /* 15px */
+  --text-lead:             1rem;        /* 16px */
+  --text-title:            1.25rem;     /* 20px */
+  --text-metric:           1.75rem;     /* 28px */
+  --text-display:          2.25rem;     /* 36px */
+
+  --radius-control:        0.625rem;    /* 10px */
+  --radius-surface:        0.9375rem;   /* 15px */
+  --radius-card:           0.9375rem;   /* 15px */
+
+  --shadow-raised:         0 1px 2px rgba(15, 23, 42, 0.035), 0 4px 12px -2px rgba(15, 23, 42, 0.025);
+  --shadow-card:           var(--shadow-raised);
+  --shadow-card-hover:     0 2px 6px rgba(15, 23, 42, 0.045), 0 10px 24px -4px rgba(15, 23, 42, 0.055);
+  --shadow-overlay:        0 14px 36px -4px rgba(15, 23, 42, 0.13), 0 4px 12px -2px rgba(15, 23, 42, 0.06);
+  --ease-saas:             cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Dark Mode Semantic Tokens ── */
+.dark, [data-theme="dark"] {
+  --color-canvas:          #0B0F17;
+  --color-surface:         #111824;
+  --color-surface-sunken:  #16202F;
+  --color-line:            #223044;
+  --color-line-strong:     #33445C;
+
+  --color-ink:             #F8FAFC;
+  --color-body:            #CBD5E1;
+  --color-ink-body:        #CBD5E1;
+  --color-muted:           #94A3B8;
+  --color-ink-muted:       #94A3B8;
+  --color-faint:           #64748B;
+  --color-ink-faint:       #64748B;
+
+  --color-ink-solid:       #F8FAFC;
+  --color-ink-solid-hover: #E2E8F0;
+  --color-on-ink-solid:    #0F172A;
+
+  --color-brand:           #3B82F6;
+  --color-brand-hover:     #60A5FA;
+  --color-brand-active:    #2563EB;
+  --color-brand-soft:      rgba(59, 130, 246, 0.15);
+  --color-brand-line:      rgba(59, 130, 246, 0.32);
+  --color-on-brand:        #FFFFFF;
+
+  --color-valid:           #10B981;
+  --color-success:         #10B981;
+  --color-valid-soft:      rgba(16, 185, 129, 0.15);
+  --color-success-soft:    rgba(16, 185, 129, 0.15);
+  --color-warning:         #F59E0B;
+  --color-warning-soft:    rgba(245, 158, 11, 0.16);
+  --color-danger:          #F43F5E;
+  --color-danger-soft:     rgba(244, 63, 94, 0.15);
+  --color-info:            #38BDF8;
+
+  --color-premi:           #60A5FA;
+  --color-premi-soft:      rgba(37, 99, 235, 0.2);
+  --color-premi-line:      rgba(96, 165, 250, 0.35);
+  --color-claim:           #93C5FD;
+  --color-claim-soft:      rgba(30, 58, 95, 0.4);
+  --color-claim-line:      rgba(147, 197, 253, 0.3);
+
+  --shadow-raised:         0 1px 3px rgba(0, 0, 0, 0.42), 0 4px 12px rgba(0, 0, 0, 0.28);
+  --shadow-card:           var(--shadow-raised);
+  --shadow-card-hover:     0 4px 16px rgba(0, 0, 0, 0.52);
+  --shadow-overlay:        0 16px 40px rgba(0, 0, 0, 0.72);
+}
+
+/* ── Base application viewport & scroll ownership ── */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+.app-main-scroll {
+  scrollbar-gutter: stable;
+}
+
 /* ── Focus ring ── */
 *:focus-visible {
-  outline: 2px solid #22c55e;
+  outline: 2px solid var(--color-brand);
   outline-offset: 2px;
 }
 
-/* ── Light content scrollbar ── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: #f8fafc; }
-::-webkit-scrollbar-thumb { background: #d1fae5; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #6ee7b7; }
+/* ── Scoped scrollbars ── */
+.app-main-scroll::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar,
+.modal-scroll::-webkit-scrollbar,
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.app-main-scroll::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track,
+.modal-scroll::-webkit-scrollbar-track,
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-main-scroll::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb,
+.modal-scroll::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-line-strong);
+  border-radius: 9999px;
+}
+.app-main-scroll::-webkit-scrollbar-thumb:hover,
+.table-scroll::-webkit-scrollbar-thumb:hover,
+.modal-scroll::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted);
+}
 
-/* ── Sidebar scrollbar ── */
-.sidebar-scroll::-webkit-scrollbar { width: 3px; }
-.sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
-.sidebar-scroll::-webkit-scrollbar-thumb { background: #15803d; border-radius: 2px; }
+/* ── Soft, unobtrusive sidebar scrollbar ── */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s ease;
+}
+.sidebar-scroll:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+.scrollbar-none,
+.no-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+.scrollbar-none::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
 
 /* ── Sticky thead blur ── */
 thead th { backdrop-filter: blur(4px); }
 
 /* ── Shared component classes ── */
 @layer components {
-  /* badges */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold;
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold;
   }
   .badge-ready      { @apply bg-emerald-100 text-emerald-800; }
-  .badge-incomplete { @apply bg-red-100    text-red-700;      }
-  .badge-pending    { @apply bg-amber-100  text-amber-700;    }
+  .badge-incomplete { @apply bg-red-100 text-red-700; }
+  .badge-pending    { @apply bg-amber-100 text-amber-700; }
 
-  /* sidebar nav item */
   .nav-item {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium
+    @apply flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-control)] text-[13px] font-medium
            transition-all duration-150 cursor-pointer select-none w-full text-left;
   }
-  .nav-item-idle   { @apply text-brand-200 hover:bg-brand-700 hover:text-white; }
-  .nav-item-active { @apply bg-white text-brand-700 shadow-sm font-semibold; }
+  .nav-item-idle   { @apply text-slate-300/80 hover:bg-white/[0.05] hover:text-white; }
+  .nav-item-active { @apply bg-white/[0.09] text-white border border-white/[0.14] shadow-xs font-semibold; }
 
-  /* page header bar */
   .page-header {
-    @apply bg-white border-b border-gray-100 px-6 py-4 flex items-center gap-3 sticky top-0 z-20;
+    @apply bg-[var(--color-surface)] border-b border-[var(--color-line)] px-6 py-3.5 flex items-center gap-3 sticky top-0 z-10;
   }
 
-  /* white card */
   .card {
-    @apply bg-white rounded-2xl border border-gray-100 shadow-card;
+    @apply bg-[var(--color-surface)] rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-card;
   }
 
-  /* green pill button (primary) */
   .btn-primary {
-    @apply flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:bg-brand-300
-           text-white font-semibold px-5 py-2.5 rounded-xl shadow transition-colors text-sm;
+    @apply flex items-center gap-2 bg-[var(--color-brand)] hover:bg-[var(--color-brand-hover)] disabled:bg-blue-300
+           text-white font-semibold px-5 py-2.5 rounded-[var(--radius-control)] shadow-sm transition-colors text-sm;
   }
 
-  /* ghost button */
   .btn-ghost {
-    @apply flex items-center gap-2 bg-white hover:bg-gray-50 disabled:opacity-50
-           text-gray-600 font-semibold px-4 py-2.5 rounded-xl border border-gray-200
+    @apply flex items-center gap-2 bg-[var(--color-surface)] hover:bg-[var(--color-surface-sunken)] disabled:opacity-50
+           text-[var(--color-ink-body)] font-semibold px-4 py-2.5 rounded-[var(--radius-control)] border border-[var(--color-line)]
            transition-colors text-sm;
   }
 
-  /* table head cell */
-  .th { @apply px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap; }
-
-  /* table body cell */
-  .td { @apply px-4 py-3 text-sm text-gray-700; }
+  .th { @apply px-4 py-3 text-left text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wide whitespace-nowrap; }
+  .td { @apply px-4 py-3 text-sm text-[var(--color-ink-body)]; }
 }

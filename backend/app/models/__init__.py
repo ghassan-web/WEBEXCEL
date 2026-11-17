@@ -4,6 +4,7 @@ from .models import (
     UploadJob,
     ComparisonJob, ComparisonResult,
     OsclnSnapshot, OsclnRow,
+    ScannedSchema, MasterRawRow,
 )
 from .session_dep import get_session_id
 
@@ -14,4 +15,5 @@ __all__ = [
     "UploadJob",
     "ComparisonJob", "ComparisonResult",
     "OsclnSnapshot", "OsclnRow",
+    "ScannedSchema", "MasterRawRow",
 ]

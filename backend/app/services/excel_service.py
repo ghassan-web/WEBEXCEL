@@ -735,27 +735,38 @@ def ingest_excel(
     else:
         # ── Single key ───────────────────────────────────────────────────
         if primary_key_col not in df.columns:
-            lower_map = {c.lower(): c for c in df.columns}
-            hint = lower_map.get(primary_key_col.lower())
-            hint_msg = f" (Mungkin maksud Anda: '{hint}'?)" if hint else ""
-            raise ValueError(
-                f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file.{hint_msg} "
-                f"Kolom tersedia: {list(df.columns)}"
-            )
+            lower_map = {str(c).strip().lower(): c for c in df.columns}
+            hint = lower_map.get(primary_key_col.strip().lower())
+            if hint:
+                primary_key_col = hint
+            else:
+                raise ValueError(
+                    f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file. "
+                    f"Kolom tersedia: {list(df.columns)}"
+                )
         pk_col_used = primary_key_col
 
     # Deduplicate within this file by PK (keep first)
     df = df.drop_duplicates(subset=[pk_col_used], keep="first")
 
+    clean_columns = [
+        str(c) for c in df.columns
+        if c != _VIRTUAL_PK and not str(c).strip().lower().startswith("unnamed")
+    ]
+
     rows = []
     for _, row in df.iterrows():
+        row_dict = _row_to_dict(row)
+        # Bersihkan kolom Unnamed yang kosong sepenuhnya
+        filtered_dict = {k: row_dict.get(k, "") for k in clean_columns}
         rows.append({
             "pk":   str(row[pk_col_used]),
-            "data": _row_to_dict(row),
+            "data": filtered_dict,
         })
 
     return {
         "sheet":      actual_sheet,
+        "columns":    clean_columns,
         "total_rows": len(df),
         "rows":       rows,
     }
@@ -1013,3 +1024,60 @@ def compare_dataframes(
         "summary":      summary,
         "results":      results,
     }
+
+
+def inspect_excel_workbook(file_bytes: bytes) -> dict:
+    """
+    Scan seluruh sheet pada file Excel untuk mengekstrak:
+    - daftar sheet yang tersedia (`available_sheets`)
+    - daftar kolom/header per sheet (`sheet_columns`)
+    - contoh nilai per kolom dari baris pertama (`sheet_samples`)
+    - jumlah baris per sheet (`sheet_row_counts`)
+    - `default_sheet` terbaik yang memiliki kolom bermakna
+    """
+    sheets = get_sheet_names(file_bytes)
+    sheet_columns: dict[str, list[str]] = {}
+    sheet_samples: dict[str, dict[str, str]] = {}
+    sheet_row_counts: dict[str, int] = {}
+
+    for s in sheets:
+        try:
+            df, _ = _read_excel(file_bytes, s)
+            clean_cols = [
+                str(c) for c in df.columns
+                if not str(c).strip().lower().startswith("unnamed")
+            ]
+            sheet_columns[s] = clean_cols
+            sheet_row_counts[s] = len(df)
+
+            sample_dict: dict[str, str] = {}
+            if len(df) > 0:
+                for col in clean_cols:
+                    # Cari nilai pertama yang tidak kosong pada 5 baris teratas
+                    val_found = ""
+                    for idx in range(min(5, len(df))):
+                        v = _sanitize(df.iloc[idx][col])
+                        if v and v.lower() not in ("nan", "none", "-"):
+                            val_found = v
+                            break
+                    sample_dict[col] = val_found
+            sheet_samples[s] = sample_dict
+        except Exception:
+            sheet_columns[s] = []
+            sheet_samples[s] = {}
+            sheet_row_counts[s] = 0
+
+    nonempty_sheets = [
+        s for s in sheets
+        if any(not col.lower().startswith("unnamed:") for col in sheet_columns.get(s, []))
+    ]
+    default_sheet = nonempty_sheets[0] if nonempty_sheets else (sheets[0] if sheets else "")
+
+    return {
+        "available_sheets": sheets,
+        "default_sheet":    default_sheet,
+        "sheet_columns":    sheet_columns,
+        "sheet_samples":    sheet_samples,
+        "sheet_row_counts": sheet_row_counts,
+    }
+

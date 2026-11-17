@@ -4,33 +4,49 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: ['"Plus Jakarta Sans"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
       },
       colors: {
+        /* Indonesia Re Corporate Blue Scale (mapped to both brand & teal for seamless UI consistency) */
         brand: {
-          50:  "#f0fdf4",
-          100: "#dcfce7",
-          200: "#bbf7d0",
-          300: "#86efac",
-          400: "#4ade80",
-          500: "#22c55e",
-          600: "#16a34a",
-          700: "#15803d",
-          800: "#166534",
-          900: "#14532d",
+          50:  "#EFF6FF",
+          100: "#DBEAFE",
+          200: "#BFDBFE",
+          300: "#93C5FD",
+          400: "#60A5FA",
+          500: "#0664D0",
+          600: "#0664D0",
+          700: "#0556B5",
+          800: "#194E82",
+          900: "#17365D",
+        },
+        teal: {
+          50:  "#EFF6FF",
+          100: "#DBEAFE",
+          200: "#BFDBFE",
+          300: "#93C5FD",
+          400: "#3B82F6",
+          500: "#0664D0",
+          600: "#0664D0",
+          700: "#0556B5",
+          800: "#194E82",
+          900: "#17365D",
         },
         sidebar: {
-          bg:      "#166534",   /* deep green */
-          hover:   "#15803d",   /* slightly lighter */
-          active:  "#14532d",   /* darkest green for active pill */
-          border:  "#15803d",
-          text:    "#bbf7d0",   /* mint text */
-          muted:   "#86efac",   /* section labels */
-          heading: "#dcfce7",
+          bg:      "#17365D",   /* Indonesia Re deep navy blue */
+          surface: "#194E82",   /* secondary corporate blue */
+          hover:   "#1E4976",   /* subtle hover state */
+          active:  "#0664D0",   /* primary brand blue */
+          border:  "#234B7A",
+          text:    "#DBEAFE",
+          muted:   "#93C5FD",
+          heading: "#EFF6FF",
         },
       },
       boxShadow: {
-        card: "0 1px 4px 0 rgba(0,0,0,.06), 0 1px 2px -1px rgba(0,0,0,.04)",
+        card: "0 1px 2px rgba(15, 23, 42, 0.035), 0 4px 12px -2px rgba(15, 23, 42, 0.025)",
+        "card-hover": "0 2px 6px rgba(15, 23, 42, 0.045), 0 10px 24px -4px rgba(15, 23, 42, 0.055)",
       },
     },
   },

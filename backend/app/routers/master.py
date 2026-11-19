@@ -11,6 +11,7 @@ Target tables:
 import json
 import hashlib
 import logging
+<<<<<<< HEAD
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -21,6 +22,12 @@ from typing import Optional
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
+=======
+from typing import List, Optional
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+>>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -778,6 +785,7 @@ def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
 def _extract_infopack_row(
     r, cedant_code, bulan, tahun, file_name, sheet_name, row_index, col_map=None
 ):
+<<<<<<< HEAD
     data = r.get("data", {})
     col_map = col_map or {}
     normalized_columns = {
@@ -2407,11 +2415,17 @@ async def inspect_master_excel(
 ):
     if not file.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
         raise HTTPException(status_code=400, detail="File harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
+=======
+    # ── Validasi format ──
+    if not file.filename.endswith((".xlsx", ".xls", ".xlsb")):
+        raise HTTPException(status_code=400, detail="File harus berformat .xlsx atau .xls")
+>>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 
     file_bytes = await file.read()
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File melebihi batas 50 MB")
 
+<<<<<<< HEAD
     try:
         info = inspect_excel_workbook(file_bytes)
     except ValueError as e:
@@ -2532,6 +2546,20 @@ async def prepare_master_upload(
         primary_key_col="",
         file_name=file_name,
         cedant=cedant_name,
+=======
+    # ── Buat upload job ──
+    # Normalise primary_key_col: strip unicode whitespace + collapse multiple spaces
+    primary_key_col = ' '.join(primary_key_col.strip().replace('\xa0', ' ').replace('\u200b', '').split())
+
+    job = UploadJob(
+        bulan=bulan,
+        tahun=tahun,
+        tipe_data=tipe_data,
+        primary_key_col=primary_key_col,
+        file_name=file.filename,
+        sheet_name=sheet_name or None,
+        cedant=cedant or None,
+>>>>>>> 772547da4971a77d44c538bf43765efad620e01f
         status="processing",
     )
     db.add(job)
@@ -3924,6 +3952,45 @@ def _upload_job_to_dict(j: UploadJob) -> dict:
         "total_rows": j.total_rows, "rows_appended": j.rows_appended,
         "rows_skipped": j.rows_skipped, "error_message": j.error_message,
         "created_at": j.created_at.isoformat() if j.created_at else None,
+    }
+
+
+# ─────────────────────────────────────────────
+# DELETE /api/master/library  (bulk)
+# Body: { "job_ids": [1, 2, 3] }
+# ─────────────────────────────────────────────
+class BulkDeleteRequest(BaseModel):
+    job_ids: List[int]
+
+@router.delete("/library", summary="Hapus beberapa file dari Library sekaligus")
+def bulk_delete_library(
+    body: BulkDeleteRequest,
+    db:   Session = Depends(get_db),
+):
+    if not body.job_ids:
+        raise HTTPException(status_code=400, detail="job_ids tidak boleh kosong")
+
+    jobs = db.query(UploadJob).filter(UploadJob.id.in_(body.job_ids)).all()
+    if not jobs:
+        raise HTTPException(status_code=404, detail="Tidak ada job yang ditemukan")
+
+    found_ids = [j.id for j in jobs]
+
+    # Remove associated master rows
+    rows_deleted = (
+        db.query(MasterData)
+        .filter(MasterData.source_job_id.in_(found_ids))
+        .delete(synchronize_session=False)
+    )
+
+    for job in jobs:
+        db.delete(job)
+    db.commit()
+
+    return {
+        "message":      f"{len(jobs)} file berhasil dihapus dari Library.",
+        "jobs_deleted": len(jobs),
+        "rows_deleted": rows_deleted,
     }
 
 

@@ -1,6 +1,10 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useColumnMappings } from "../hooks/useColumnMappings";
-import { inspectMasterFile, uploadToMaster } from "../services/api";
+import {
+  confirmMasterUploadMapping,
+  inspectMasterFile,
+  prepareMasterUpload,
+} from "../services/api";
 import { Button, Badge } from "../components/ui";
 import {
   ArrowUpTrayIcon,
@@ -41,16 +45,28 @@ const WIZARD_STEPS = [
   { id: "EXECUTING", label: "Process & Save",       subtitle: "Simpan ke database & arsipkan semua kolom" },
 ];
 
-/**
- * Daftar Kolom Target yang Dicari pada File Excel.
- * Saat ini sesuai instruksi: baru mencari DOL / Date of Loss terlebih dahulu.
- * Kolom target berikutnya tinggal ditambahkan ke array ini.
- */
+/** Target fields users can map for each dataset type. */
 export const TARGET_SEARCH_COLUMNS = [
+  {
+    dbField: "doc_no",
+    label: "Loss Ref / Doc No",
+    required: true,
+    sqlType: "VARCHAR(255)",
+    description: "Nomor dokumen atau referensi klaim",
+    patterns: [/^doc\s*no\.?$/i, /^loss\s*ref(erence)?$/i, /\bclaim\s*(no|number)\b/i],
+  },
+  {
+    dbField: "outstanding",
+    label: "Outstanding",
+    required: true,
+    sqlType: "NUMERIC",
+    description: "Nilai cadangan klaim outstanding",
+    patterns: [/outstanding/i, /\bnet\s*os\b/i, /\bos\s*amount\b/i],
+  },
   {
     dbField: "dol",
     label: "DOL / Date of Loss",
-    required: true,
+    required: false,
     sqlType: "DATE",
     description: "Tanggal Kejadian Klaim (Date of Loss)",
     patterns: [
@@ -69,14 +85,60 @@ export const TARGET_SEARCH_COLUMNS = [
       /date.*loss|loss.*date/i,
     ],
   },
+  {
+    dbField: "currency",
+    label: "Currency",
+    required: false,
+    sqlType: "VARCHAR(10)",
+    description: "Kode mata uang",
+    patterns: [/^currency$/i, /^curr(?:ency)?\s*code$/i],
+  },
 ];
 
-/** Auto-match daftar kolom Excel terhadap TARGET_SEARCH_COLUMNS */
-function matchExcelColumnsToTargets(excelColumns = [], activeProfile = null) {
+const INFOPACK_TARGET_SEARCH_COLUMNS = [
+  {
+    dbField: "dol",
+    label: "DOL / Date of Loss",
+    required: true,
+    sqlType: "DATE",
+    patterns: [/^dol$/i, /^date\s*of\s*loss$/i, /^loss\s*date$/i, /\bdol\b/i],
+  },
+  {
+    dbField: "cob",
+    label: "COB",
+    required: true,
+    sqlType: "VARCHAR(100)",
+    patterns: [/^cob$/i, /class\s*of\s*business/i, /business\s*class/i],
+  },
+  {
+    dbField: "gross",
+    label: "Gross",
+    required: true,
+    sqlType: "NUMERIC",
+    patterns: [/gross/i],
+  },
+  {
+    dbField: "tsi",
+    label: "TSI",
+    required: true,
+    sqlType: "NUMERIC",
+    patterns: [/^tsi$/i, /total\s*sum\s*insured/i, /sum\s*insured/i],
+  },
+  {
+    dbField: "insured",
+    label: "Insured",
+    required: false,
+    sqlType: "TEXT",
+    patterns: [/insured/i, /policyholder/i],
+  },
+];
+
+/** Auto-match Excel headers against the active dataset's target fields. */
+function matchExcelColumnsToTargets(excelColumns = [], activeProfile = null, targets = TARGET_SEARCH_COLUMNS) {
   const matchedMap = {}; // { dbField: excelColName }
   const usedCols = new Set();
 
-  TARGET_SEARCH_COLUMNS.forEach((target) => {
+  targets.forEach((target) => {
     /* 1. Cek dari profil mapping cedant terlebih dahulu (misal profile.dateOfLoss) */
     if (target.dbField === "dol" && activeProfile?.dateOfLoss && activeProfile.dateOfLoss !== "—" && activeProfile.dateOfLoss !== "(Tidak tersedia)") {
       const exactFromProfile = excelColumns.find(
@@ -174,10 +236,14 @@ export default function ComparePage({ onNavigate }) {
   const [uploadPct, setUploadPct] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
+  const [preparedUpload, setPreparedUpload] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
 
   const isInfopack = activeTab === "infopack";
   const tipeData = isInfopack ? "Infopack" : "OS Cedant";
+  const targetSearchColumns = isInfopack
+    ? INFOPACK_TARGET_SEARCH_COLUMNS
+    : TARGET_SEARCH_COLUMNS;
 
   /* ── Unique Insurance Company List ── */
   const allProfilesForTab = useMemo(
@@ -286,19 +352,27 @@ export default function ComparePage({ onNavigate }) {
 
       const res = await inspectMasterFile(fd);
       setInspectData(res);
+      if (!activeCedantObj && res.cedant_code) {
+        activeCedantObj = {
+          name: res.cedant_name || res.cedant_code,
+          code: res.cedant_code,
+          sheets: "All sheets",
+        };
+        setSelectedCedant(activeCedantObj);
+      }
 
       const defSheet = res.default_sheet || res.available_sheets?.[0] || "";
       setSelectedSheet(defSheet);
 
       const cols = res.sheet_columns?.[defSheet] || [];
       const prof = allProfilesForTab.find((p) => p.cedant === activeCedantObj?.name) || null;
-      const initialTargetMap = matchExcelColumnsToTargets(cols, prof);
-      /* Gabungkan juga auto_mappings dari backend untuk doc_no / outstanding / currency di balik layar */
+      const initialTargetMap = matchExcelColumnsToTargets(cols, prof, targetSearchColumns);
       const backendMap = res.auto_mappings?.[defSheet] || {};
       setMapping({
         ...backendMap,
         ...initialTargetMap,
       });
+      setPreparedUpload(null);
     } catch (err) {
       setErrorMessage(err.message || "Gagal memindai header file Excel. Pastikan backend berjalan di port 8000.");
       setInspectData(null);
@@ -312,7 +386,7 @@ export default function ComparePage({ onNavigate }) {
     setSelectedSheet(newSheet);
     const cols = inspectData?.sheet_columns?.[newSheet] || [];
     const backendMap = inspectData?.auto_mappings?.[newSheet] || {};
-    const targetMap = matchExcelColumnsToTargets(cols, currentProfile);
+    const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
     setMapping({
       ...backendMap,
       ...targetMap,
@@ -322,7 +396,7 @@ export default function ComparePage({ onNavigate }) {
   const handleAutoMatchAgain = () => {
     const cols = inspectData?.sheet_columns?.[selectedSheet] || [];
     const backendMap = inspectData?.auto_mappings?.[selectedSheet] || {};
-    const targetMap = matchExcelColumnsToTargets(cols, currentProfile);
+    const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
     setMapping({
       ...backendMap,
       ...targetMap,
@@ -334,7 +408,7 @@ export default function ComparePage({ onNavigate }) {
     setMapping((prev) => {
       const next = { ...prev };
       /* Hapus penugasan lama jika kolom Excel ini sebelumnya dipetakan ke target lain */
-      TARGET_SEARCH_COLUMNS.forEach((t) => {
+      targetSearchColumns.forEach((t) => {
         if (next[t.dbField] === excelColName) {
           delete next[t.dbField];
         }
@@ -346,10 +420,10 @@ export default function ComparePage({ onNavigate }) {
     });
   };
 
-  /* Lookup cepat: untuk setiap kolom Excel, apakah dia cocok dengan salah satu TARGET_SEARCH_COLUMNS? */
+  /* Lookup cepat untuk menandai kolom yang dipetakan ke field target. */
   const excelColToTargetMap = useMemo(() => {
     const map = {}; // { excelColName: targetObj }
-    TARGET_SEARCH_COLUMNS.forEach((t) => {
+    targetSearchColumns.forEach((t) => {
       const assignedExcelCol = mapping?.[t.dbField];
       if (assignedExcelCol) {
         map[assignedExcelCol] = t;
@@ -377,21 +451,77 @@ export default function ComparePage({ onNavigate }) {
     setErrorMessage("");
 
     try {
-      const fd = new FormData();
-      fd.append("bulan", bulan);
-      fd.append("tahun", tahun);
-      fd.append("tipe_data", tipeData);
-      const pkCol = isInfopack
-        ? mapping.title || scannedColumns[0] || ""
-        : mapping.doc_no || scannedColumns[0] || "";
-      fd.append("primary_key_col", pkCol);
-      if (selectedCedant?.name) fd.append("cedant", selectedCedant.name);
-      if (selectedCedant?.code) fd.append("cedant_code", selectedCedant.code);
-      if (selectedSheet) fd.append("sheet_name", selectedSheet);
-      fd.append("custom_mapping", JSON.stringify(mapping));
-      fd.append("file", file);
+      let prepared = preparedUpload;
+      const preparedSheet = prepared?.sheets?.find(
+        (sheet) => sheet.sheet_name === selectedSheet
+      );
+      if (!preparedSheet) {
+        const cedantName = selectedCedant?.name || inspectData?.cedant_name;
+        const cedantCode = selectedCedant?.code || inspectData?.cedant_code;
+        if (!cedantName && !cedantCode) {
+          throw new Error("Cedant belum dipilih atau tidak berhasil dideteksi.");
+        }
+        const fd = new FormData();
+        fd.append("bulan", bulan);
+        fd.append("tahun", tahun);
+        fd.append("tipe_data", tipeData);
+        if (cedantName) fd.append("cedant", cedantName);
+        if (cedantCode) fd.append("cedant_code", cedantCode);
+        fd.append("file", file);
+        prepared = await prepareMasterUpload(fd, (pct) => setUploadPct(pct));
+        setPreparedUpload(prepared);
+      }
 
-      const res = await uploadToMaster(fd, (pct) => setUploadPct(pct));
+      const sheet = prepared.sheets?.find(
+        (item) => item.sheet_name === selectedSheet
+      );
+      if (!sheet) {
+        throw new Error("Sheet yang dipilih tidak berhasil disiapkan untuk mapping.");
+      }
+      if (sheet.status === "ready") {
+        throw new Error("Sheet ini sudah selesai diproses.");
+      }
+      const confirmed = sheet.status === "empty"
+        ? { status: "ready", rows_appended: 0, rows_updated: 0, rows_skipped: 0 }
+        : await confirmMasterUploadMapping(sheet.table_id, mapping);
+      const updatedSheets = prepared.sheets.map((item) =>
+        item.table_id === sheet.table_id
+          ? {
+              ...item,
+              status: "ready",
+              mapping_version: confirmed.mapping_version ?? item.suggested_version,
+            }
+          : item
+      );
+      const pendingSheets = updatedSheets.filter(
+        (item) => item.status !== "ready" && item.status !== "empty"
+      );
+      const updatedPrepared = {
+        ...prepared,
+        status: pendingSheets.length ? "needs_review" : "ready",
+        sheets: updatedSheets,
+      };
+      setPreparedUpload(updatedPrepared);
+      const resultMessage = sheet.status === "empty"
+        ? "Sheet berhasil diarsipkan; tidak ada baris data untuk diproses."
+        : `Upload berhasil. ${confirmed.rows_appended} baris ditambahkan, ${confirmed.rows_updated} dilengkapi, dan ${confirmed.rows_skipped} dilewati.`;
+      const res = {
+        ...confirmed,
+        ...updatedPrepared,
+        status: updatedPrepared.status,
+        batch_status: confirmed.batch_status || updatedPrepared.status,
+        sheet: selectedSheet,
+        total_rows: sheet.total_rows,
+        total_columns: sheet.headers.length,
+        total_headers_stored: updatedSheets.reduce(
+          (total, item) => total + (item.headers?.length || 0),
+          0
+        ),
+        pending_sheets: pendingSheets,
+        message: pendingSheets.length
+          ? `${resultMessage} ${pendingSheets.length} sheet lain masih menunggu konfirmasi mapping.`
+          : resultMessage,
+      };
       setUploadResult(res);
       setCurrentStep("SUCCESS");
     } catch (err) {
@@ -400,6 +530,14 @@ export default function ComparePage({ onNavigate }) {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleContinueNextSheet = () => {
+    const nextSheet = uploadResult?.pending_sheets?.[0];
+    if (!nextSheet) return;
+    handleSheetChange(nextSheet.sheet_name);
+    setUploadResult(null);
+    setCurrentStep("MAPPING");
   };
 
   const handleResetAll = () => {
@@ -411,6 +549,7 @@ export default function ComparePage({ onNavigate }) {
     setErrorMessage("");
     setUploadPct(0);
     setCurrentStep("UPLOAD");
+    setPreparedUpload(null);
   };
 
   const activeStepOrder =
@@ -553,7 +692,7 @@ export default function ComparePage({ onNavigate }) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
                   <span className="font-semibold text-[var(--color-ink)]">
-                    Mode Referensi Aktif ({cedantOptions.length} Insurance Company tersedia)
+                    Database Unavailable ({cedantOptions.length} cedant dari database)
                   </span>
                   {mappingsError && (
                     <span className="text-[var(--color-ink-muted)] truncate max-w-md">
@@ -966,7 +1105,7 @@ export default function ComparePage({ onNavigate }) {
             <div className="p-4 rounded-[var(--radius-surface)] bg-[var(--color-surface-sunken)] border border-[var(--color-line)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className="text-xs font-bold uppercase tracking-wider text-[var(--color-ink)]">
-                  Target Kolom yang Dicari Saat Ini ({TARGET_SEARCH_COLUMNS.length} Target):
+                  Target Kolom yang Dicari Saat Ini ({targetSearchColumns.length} Target):
                 </div>
                 <p className="text-xs text-[var(--color-ink-muted)]">
                   Kolom Excel yang cocok dengan daftar target ditandai <strong>Hijau (Matched)</strong>, sedangkan kolom lainnya yang tidak termasuk/tidak ketemu ditandai <strong>Merah</strong>. Seluruh {scannedColumns.length} kolom tetap disimpan agar bisa di-GET.
@@ -974,7 +1113,7 @@ export default function ComparePage({ onNavigate }) {
               </div>
 
               <div className="flex items-center gap-2 flex-wrap shrink-0">
-                {TARGET_SEARCH_COLUMNS.map((t) => {
+                {targetSearchColumns.map((t) => {
                   const foundCol = mapping?.[t.dbField];
                   return (
                     <div
@@ -1131,7 +1270,7 @@ export default function ComparePage({ onNavigate }) {
                               }`}
                             >
                               <option value="">— Tidak Cocok (Unmatched) —</option>
-                              {TARGET_SEARCH_COLUMNS.map((t) => (
+                              {targetSearchColumns.map((t) => (
                                 <option key={t.dbField} value={t.dbField}>
                                   {t.label} ({t.dbField})
                                 </option>
@@ -1234,6 +1373,9 @@ export default function ComparePage({ onNavigate }) {
                 <Badge tone="valid" dot>
                   Job #{uploadResult.job_id}
                 </Badge>
+                <Badge tone="brand">
+                  Batch #{uploadResult.batch_id}
+                </Badge>
               </div>
               <p className="text-xs text-[var(--color-ink-muted)]">
                 {uploadResult.message}
@@ -1269,10 +1411,10 @@ export default function ComparePage({ onNavigate }) {
             </div>
             <div className="p-4 rounded-[var(--radius-control)] bg-[var(--color-brand-soft)]/50 border border-[var(--color-brand-line)]">
               <span className="text-[11px] font-semibold text-[var(--color-brand)] block">
-                Scanned Headers Stored
+                Headers Diarsipkan (Semua Sheet)
               </span>
               <span className="text-2xl font-bold font-mono text-[var(--color-brand)] mt-1 block">
-                {uploadResult.total_columns ?? scannedColumns.length} Cols
+                {uploadResult.total_headers_stored ?? uploadResult.total_columns ?? scannedColumns.length} Cols
               </span>
             </div>
           </div>
@@ -1281,7 +1423,15 @@ export default function ComparePage({ onNavigate }) {
             <Button variant="secondary" onClick={handleResetAll}>
               Upload File Lain
             </Button>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 flex-wrap justify-end">
+              {uploadResult.pending_sheets?.length > 0 && (
+                <Button
+                  variant="primary"
+                  onClick={handleContinueNextSheet}
+                >
+                  Lanjutkan Sheet Berikutnya ({uploadResult.pending_sheets.length})
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 onClick={() => onNavigate?.("library_os")}
@@ -1289,7 +1439,7 @@ export default function ComparePage({ onNavigate }) {
                 Buka Library
               </Button>
               <Button
-                variant="primary"
+                variant={uploadResult.pending_sheets?.length > 0 ? "secondary" : "primary"}
                 icon={TableCellsIcon}
                 onClick={() => onNavigate?.("master")}
               >

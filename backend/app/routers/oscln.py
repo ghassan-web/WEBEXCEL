@@ -131,7 +131,10 @@ def run_reconciliation(
     pk = primary_key_col.strip()
 
     # ── Load Master rows dari tabel kolumnar ──────────────────────────
-    from ..routers.master import _target_table as _tt
+    from ..routers.master import (
+        _qualified_master_table,
+        _target_table as _tt,
+    )
     master_table = _tt(tipe_data)
     is_infopack  = "infopack" in master_table
 
@@ -142,7 +145,10 @@ def run_reconciliation(
         params["cedant"] = cedant
 
     master_raw = db.execute(
-        text(f"SELECT * FROM {master_table} WHERE {' AND '.join(where)}"),
+        text(
+            f"SELECT * FROM {_qualified_master_table(master_table)} "
+            f"WHERE {' AND '.join(where)}"
+        ),
         params,
     ).mappings().all()
 
@@ -163,6 +169,9 @@ def run_reconciliation(
             data   = {
                 "cedant_code": r.get("cedant_code"), "class_code": r.get("class_code"),
                 "title": r.get("title"), "value": r.get("value"),
+                "dol": dol_str, "cob": r.get("cob"),
+                "gross": str(r.get("gross")) if r.get("gross") is not None else "",
+                "tsi": str(r.get("tsi")) if r.get("tsi") is not None else "",
                 "month": r.get("month"), "year": r.get("year"),
                 "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
                 "cedant": r.get("cedant_code"),

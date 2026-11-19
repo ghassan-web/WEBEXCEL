@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { getLibrary, deleteLibraryEntry, getMasterData } from "../services/api";
+import {
+  getHeaderLibrary,
+  getLibrary,
+  deleteLibraryEntry,
+  getMasterData,
+} from "../services/api";
 import {
   BookOpenIcon,
   ArrowPathIcon,
@@ -17,6 +22,7 @@ import {
 } from "@heroicons/react/24/outline";
 
 const PAGE_SIZE = 20;
+const HEADER_PAGE_SIZE = 50;
 
 const STATUS_STYLE = {
   done:       "bg-emerald-100 text-emerald-700 border border-emerald-200",
@@ -77,10 +83,214 @@ function ConfirmModal({ file, onConfirm, onCancel, loading }) {
   );
 }
 
+function HeaderLibraryView({ activeTab }) {
+  const [data, setData] = useState({ total: 0, headers: [] });
+  const [page, setPage] = useState(0);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [cedantInput, setCedantInput] = useState("");
+  const [cedant, setCedant] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await getHeaderLibrary(activeTab, {
+        cedant: cedant || undefined,
+        search: search || undefined,
+        skip: page * HEADER_PAGE_SIZE,
+        limit: HEADER_PAGE_SIZE,
+      });
+      setData(result);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab, cedant, page, search]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [activeTab, cedant, search]);
+
+  const headers = data.headers || [];
+  const totalPages = Math.ceil(data.total / HEADER_PAGE_SIZE);
+
+  const applyFilters = () => {
+    setSearch(searchInput.trim());
+    setCedant(cedantInput.trim());
+    setPage(0);
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">
+          HEADER CATALOG
+        </p>
+        <h2 className="text-2xl font-extrabold text-gray-800">Header Library</h2>
+        <p className="text-xs text-gray-500 mt-1">
+          Satu baris per header pada setiap sheet upload. Header berulang tetap disimpan.
+        </p>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-gray-100 flex flex-wrap items-center gap-3">
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && applyFilters()}
+            placeholder="Cari header, file, atau sheet…"
+            aria-label="Cari header, file, atau sheet"
+            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-64"
+          />
+          <input
+            type="text"
+            value={cedantInput}
+            onChange={(event) => setCedantInput(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && applyFilters()}
+            placeholder="Kode cedant (opsional)"
+            aria-label="Filter kode cedant"
+            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-48"
+          />
+          <button
+            type="button"
+            onClick={applyFilters}
+            className="px-3 py-1.5 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-lg"
+          >
+            Terapkan
+          </button>
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg disabled:opacity-40"
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+          <span className="text-xs text-gray-500">
+            {data.total.toLocaleString("id-ID")} header
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50">
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant</th>
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">File</th>
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Batch / Table ID</th>
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Sheet</th>
+                <th className="px-4 py-2.5 text-right font-semibold text-gray-500 uppercase tracking-wide">Index</th>
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Original Header</th>
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Mapping Version</th>
+                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Waktu Upload</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading && (
+                <tr>
+                  <td colSpan={8} className="text-center py-12 text-gray-400 animate-pulse">
+                    Memuat header…
+                  </td>
+                </tr>
+              )}
+              {!loading && headers.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="text-center py-12 text-gray-400">
+                    Belum ada header yang cocok dengan filter.
+                  </td>
+                </tr>
+              )}
+              {!loading && headers.map((header) => (
+                <tr key={header.header_id} className="hover:bg-teal-50/30">
+                  <td className="px-4 py-2.5 font-semibold text-gray-700 whitespace-nowrap">
+                    {header.cedant_name || header.cedant_code || "—"}
+                    {header.cedant_code && (
+                      <span className="ml-1 text-gray-400 font-mono">({header.cedant_code})</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-700 max-w-[240px] truncate" title={header.file_name}>
+                    {header.file_name}
+                  </td>
+                  <td className="px-4 py-2.5 font-mono text-gray-500 whitespace-nowrap">
+                    {header.batch_id} / {header.table_id}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{header.sheet_name}</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-gray-500">{header.column_index}</td>
+                  <td className="px-4 py-2.5 font-mono font-semibold text-gray-800 whitespace-nowrap">
+                    {header.original_header}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-500">
+                    {header.mapping_version ?? "Belum dikonfirmasi"}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
+                    {header.uploaded_at
+                      ? new Date(header.uploaded_at).toLocaleString("id-ID", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {totalPages > 1 && (
+          <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+            <span className="text-xs text-gray-500">
+              {page * HEADER_PAGE_SIZE + 1}–{Math.min((page + 1) * HEADER_PAGE_SIZE, data.total)} dari{" "}
+              {data.total.toLocaleString("id-ID")} header
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+                disabled={page === 0 || loading}
+                className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50"
+                aria-label="Halaman sebelumnya"
+              >
+                <ChevronLeftIcon className="h-3.5 w-3.5 text-gray-600" />
+              </button>
+              <span className="text-xs font-semibold text-gray-600">{page + 1} / {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
+                disabled={page >= totalPages - 1 || loading}
+                className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50"
+                aria-label="Halaman berikutnya"
+              >
+                <ChevronRightIcon className="h-3.5 w-3.5 text-gray-600" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════
    MAIN PAGE
 ══════════════════════════════════════════════ */
 export default function LibraryPage({ initialTab }) {
+  const [libraryView, setLibraryView] = useState("files");
   const [activeTab,   setActiveTab]   = useState(initialTab === "infopack" ? "Infopack" : "OS Cedant");
   const [files,       setFiles]       = useState([]);
   const [total,       setTotal]       = useState(0);
@@ -113,7 +323,9 @@ export default function LibraryPage({ initialTab }) {
     }
   }, [activeTab, page]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (libraryView === "files") load();
+  }, [libraryView, load]);
   useEffect(() => { setPage(0); setSearch(""); setSearchInput(""); }, [activeTab]);
 
   const showToast = (msg, type = "success") => {
@@ -168,11 +380,13 @@ export default function LibraryPage({ initialTab }) {
           <p className="text-[10px] font-bold uppercase tracking-widest text-teal-600">FILE MANAGEMENT</p>
           <h1 className="text-base font-bold text-gray-800 leading-tight">Library</h1>
         </div>
-        <button onClick={load} disabled={loading}
-          className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40">
-          <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          ↺ Refresh
-        </button>
+        {libraryView === "files" && (
+          <button onClick={load} disabled={loading}
+            className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40">
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            ↺ Refresh
+          </button>
+        )}
       </div>
 
       <div className="px-6 py-6 flex flex-col gap-5 max-w-7xl w-full">
@@ -193,6 +407,31 @@ export default function LibraryPage({ initialTab }) {
           ))}
         </div>
 
+        <div className="flex gap-1 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
+          {[
+            ["files", "File Uploads"],
+            ["headers", "Header Library"],
+          ].map(([view, label]) => (
+            <button
+              key={view}
+              type="button"
+              onClick={() => setLibraryView(view)}
+              className={[
+                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all",
+                libraryView === view
+                  ? "bg-teal-600 text-white shadow-sm"
+                  : "text-gray-500 hover:text-gray-700",
+              ].join(" ")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {libraryView === "headers" ? (
+          <HeaderLibraryView activeTab={activeTab} />
+        ) : (
+          <>
         {/* ── Section title ── */}
         <div>
           <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">FILE MANAGEMENT</p>
@@ -407,6 +646,8 @@ export default function LibraryPage({ initialTab }) {
             Menghapus file dari Library juga menghapus baris datanya dari Master.
           </span>
         </div>
+          </>
+        )}
 
       </div>
 

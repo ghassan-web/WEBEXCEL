@@ -16,7 +16,7 @@ if not DATABASE_URL:
     port     = os.getenv("DB_PORT", "5432").strip()
     database = os.getenv("DB_DATABASE", "").strip()
     username = os.getenv("DB_USERNAME", "").strip()
-    password = os.getenv("DB_PASSWORD", "")
+    password = os.getenv("DB_PASSWORD", "").strip()
 
     DATABASE_URL = URL.create(
         "postgresql+psycopg2",

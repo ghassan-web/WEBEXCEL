@@ -772,6 +772,35 @@ def ingest_excel(
     }
 
 
+def ingest_excel_raw(
+    file_bytes: bytes,
+    sheet_name: Optional[str] = None,
+    decrypt_password: bool = False,
+) -> dict:
+    """Read one sheet without deduplicating rows and retain their Excel row numbers."""
+    source_bytes = (
+        read_excel_with_password(file_bytes).getvalue()
+        if decrypt_password
+        else file_bytes
+    )
+    df, actual_sheet = _read_excel(source_bytes, sheet_name)
+    header_row = _find_header_row(source_bytes, actual_sheet)
+    headers = [str(column) for column in df.columns]
+    rows = []
+    for source_index, row in df.iterrows():
+        row_data = _row_to_dict(row)
+        rows.append({
+            "excel_row": header_row + int(source_index) + 2,
+            "data": {header: row_data.get(header, "") for header in headers},
+        })
+    return {
+        "sheet": actual_sheet,
+        "columns": headers,
+        "total_rows": len(rows),
+        "rows": rows,
+    }
+
+
 # ─────────────────────────────────────────────
 # CSV ingestion (for OSCLN snapshots)
 # ─────────────────────────────────────────────

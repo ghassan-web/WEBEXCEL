@@ -16,6 +16,7 @@ _PK_BIGINT = BigInteger().with_variant(Integer, "sqlite")
 class MasterOsCedant(Base):
     """Tabel utama OS Claim Cedant — master_os_cedant_web."""
     __tablename__ = "master_os_cedant_web"
+    __table_args__ = {"schema": "rekonsiliasi"}
 
     id          = Column(_PK_BIGINT, primary_key=True, autoincrement=True)
     cedant_code = Column(String(50),  nullable=True,  index=True)
@@ -25,8 +26,9 @@ class MasterOsCedant(Base):
     currency    = Column(String(10),  nullable=True)
     month       = Column(Integer,     nullable=True)
     year        = Column(Integer,     nullable=True)
-    file_name   = Column(Text,        nullable=True)
-    sheet_name  = Column(Text,        nullable=True)
+    file_name   = Column(String,      nullable=True)
+    sheet_name  = Column(String,      nullable=True)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     def __repr__(self):
         return f"<MasterOsCedant id={self.id} cedant={self.cedant_code} doc={self.doc_no}>"
@@ -39,24 +41,30 @@ class MasterOsCedant(Base):
 class MasterOsInfopack(Base):
     """Tabel utama Infopack — master_os_infopack_web."""
     __tablename__ = "master_os_infopack_web"
+    __table_args__ = {"schema": "rekonsiliasi"}
 
     id          = Column(_PK_BIGINT, primary_key=True, autoincrement=True)
     cedant_code = Column(String(50),  nullable=True, index=True)
     class_code  = Column(String(50),  nullable=True)
-    title       = Column(Text,        nullable=True)
-    value       = Column(Text,        nullable=True)
+    title       = Column(String,      nullable=True)
+    value       = Column(String,      nullable=True)
     row_index   = Column(Integer,     nullable=True)
     month       = Column(Integer,     nullable=True)
     year        = Column(Integer,     nullable=True)
-    file_name   = Column(Text,        nullable=True)
-    sheet_name  = Column(Text,        nullable=True)
+    file_name   = Column(String,      nullable=True)
+    sheet_name  = Column(String,      nullable=True)
+    dol         = Column(Date,        nullable=True)
+    cob         = Column(String(100),  nullable=True)
+    gross       = Column(Numeric(30, 2), nullable=True)
+    tsi         = Column(Numeric(30, 2), nullable=True)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     def __repr__(self):
         return f"<MasterOsInfopack id={self.id} cedant={self.cedant_code}>"
 
 
 # ─────────────────────────────────────────────────────────────
-# Upload job log — dibuat otomatis jika belum ada
+# Upload job log — tabel sudah tersedia di database
 # ─────────────────────────────────────────────────────────────
 
 class UploadJob(Base):
@@ -160,6 +168,7 @@ class OsclnRow(Base):
 class ScannedSchema(Base):
     """Menyimpan seluruh header kolom hasil scan dari file Excel yang diupload."""
     __tablename__ = "master_scanned_schemas"
+    __table_args__ = {"schema": "rekonsiliasi"}
 
     id               = Column(Integer, primary_key=True, autoincrement=True)
     job_id           = Column(Integer, nullable=True, index=True)
@@ -183,6 +192,7 @@ class ScannedSchema(Base):
 class MasterRawRow(Base):
     """Menyimpan seluruh kolom asli per baris dari file Excel agar semua kolom tetap bisa di-GET."""
     __tablename__ = "master_raw_rows"
+    __table_args__ = {"schema": "rekonsiliasi"}
 
     id                = Column(_PK_BIGINT, primary_key=True, autoincrement=True)
     job_id            = Column(Integer, nullable=True, index=True)

@@ -21,7 +21,7 @@ Dokumentasi fitur yang sudah ada, alur data, progress implementasi, dan batas ve
 3. Konfigurasikan koneksi PostgreSQL melalui `DATABASE_URL`, atau variabel `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, dan opsional `DB_SCHEMA`.
 4. Jalankan `uvicorn app.main:app --reload --port 8000`.
 
-Dokumentasi API tersedia di `http://localhost:8000/docs`. Backend mencoba membuat tabel yang didefinisikan oleh SQLAlchemy saat aplikasi diimpor; tabel mapping eksternal dan akses ke tabel Master tetap harus tersedia di database yang dikonfigurasi.
+Dokumentasi API tersedia di `http://localhost:8000/docs`. Backend tidak membuat atau mengubah tabel saat startup; semua tabel Master dan upload harus sudah tersedia pada database yang dikonfigurasi.
 
 Untuk file KB INS tertentu, pembacaan workbook terenkripsi memerlukan variabel `EXCEL_PASSWORD`.
 

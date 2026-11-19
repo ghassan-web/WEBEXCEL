@@ -176,6 +176,21 @@ export async function uploadToMaster(formData, onProgress) {
   return xhrUpload(`${BASE_URL}/api/master/upload`, formData, onProgress);
 }
 
+/** POST /api/master/prepare — archive a selected sheet and its raw rows for mapping review. */
+export async function prepareMasterUpload(formData, onProgress) {
+  return xhrUpload(`${BASE_URL}/api/master/prepare`, formData, onProgress);
+}
+
+/** POST /api/master/tables/:tableId/confirm — save the confirmed mapping and normalized rows. */
+export async function confirmMasterUploadMapping(tableId, mapping) {
+  const res = await fetch(`${BASE_URL}/api/master/tables/${tableId}/confirm`, {
+    method: "POST",
+    headers: sessionHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ mapping }),
+  });
+  return handleResponse(res);
+}
+
 /** GET /api/master/headers — ambil katalog seluruh header Excel yang pernah di-scan */
 export async function getScannedHeaders(tipeData, cedant) {
   const params = new URLSearchParams();
@@ -216,6 +231,22 @@ export async function getLibrary(tipeData, { skip = 0, limit = 50 } = {}) {
   if (tipeData) params.append("tipe_data", tipeData);
   const res = await fetch(
     `${BASE_URL}/api/master/library?${params}`,
+    { headers: sessionHeaders() },
+  );
+  return handleResponse(res);
+}
+
+/** GET /api/master/header-library — setiap header, termasuk pengulangan per file/sheet. */
+export async function getHeaderLibrary(
+  tipeData,
+  { cedant, search, skip = 0, limit = 50 } = {},
+) {
+  const params = new URLSearchParams({ skip, limit });
+  if (tipeData) params.append("tipe_data", tipeData);
+  if (cedant) params.append("cedant", cedant);
+  if (search) params.append("search", search);
+  const res = await fetch(
+    `${BASE_URL}/api/master/header-library?${params}`,
     { headers: sessionHeaders() },
   );
   return handleResponse(res);

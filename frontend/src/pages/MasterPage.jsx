@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { getMasterData, exportMasterCsv } from "../services/api";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { getMasterData, getColumnMappings, exportMasterCsv } from "../services/api";
 import { Button, Badge } from "../components/ui";
 import {
   ArrowDownTrayIcon,
@@ -20,6 +20,9 @@ export default function MasterPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [activeTab, setActiveTab] = useState("os"); // 'os' | 'infopack'
+  const [selectedCedant, setSelectedCedant] = useState("");
+  const [mappingProfiles, setMappingProfiles] = useState([]);
+  const [cedantOptionsError, setCedantOptionsError] = useState(null);
   const [columnView, setColumnView] = useState("core"); // 'core' | 'all'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -32,6 +35,7 @@ export default function MasterPage() {
     setError(null);
     try {
       const res = await getMasterData(tipeData, {
+        cedant: selectedCedant || undefined,
         search: search || undefined,
         skip: page * PAGE_SIZE,
         limit: PAGE_SIZE,
@@ -42,20 +46,53 @@ export default function MasterPage() {
     } finally {
       setLoading(false);
     }
-  }, [tipeData, search, page]);
+  }, [tipeData, selectedCedant, search, page]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   useEffect(() => {
+    let cancelled = false;
+    getColumnMappings()
+      .then((res) => {
+        if (!cancelled) setMappingProfiles(res.profiles || []);
+      })
+      .catch((e) => {
+        if (!cancelled) setCedantOptionsError(e.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     setPage(0);
-  }, [activeTab, search]);
+  }, [activeTab, search, selectedCedant]);
 
   const totalRows = data?.total ?? 0;
   const totalPages = Math.ceil(totalRows / PAGE_SIZE);
   const rows = data?.rows || [];
   const scannedHeaders = data?.scanned_headers || [];
+  const cedantOptions = useMemo(() => {
+    const options = new Map();
+    mappingProfiles
+      .filter((profile) => profile.tipe_data === tipeData)
+      .forEach((profile) => {
+        const code = String(profile.cedantCode || "").trim();
+        if (code && !options.has(code)) {
+          options.set(code, {
+            code,
+            name: String(profile.cedant || code).trim(),
+          });
+        }
+      });
+    return [...options.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [mappingProfiles, tipeData]);
+  const selectedCedantName = cedantOptions.find(
+    (option) => option.code === selectedCedant,
+  )?.name;
 
   const displayValue = (value) => {
     if (value === null || value === undefined) return "";
@@ -93,7 +130,7 @@ export default function MasterPage() {
 
   const handleExport = () => {
     setExporting(true);
-    exportMasterCsv(tipeData);
+    exportMasterCsv(tipeData, selectedCedant || undefined);
     setTimeout(() => setExporting(false), 1500);
   };
 
@@ -109,7 +146,7 @@ export default function MasterPage() {
             Master {activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}
           </h1>
           <p className="text-xs text-[var(--color-ink-muted)] mt-0.5 max-w-2xl">
-            Menampilkan kolom inti yang masuk ke tabel utama PostgreSQL maupun seluruh kolom asli hasil scan file Excel.
+            Pilih cedant untuk melihat data intinya atau seluruh kolom asli hasil scan file Excel.
           </p>
         </div>
 
@@ -147,7 +184,10 @@ export default function MasterPage() {
             <button
               key={key}
               type="button"
-              onClick={() => setActiveTab(key)}
+              onClick={() => {
+                setActiveTab(key);
+                setSelectedCedant("");
+              }}
               className={`px-4 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold transition-all cursor-pointer ${
                 activeTab === key
                   ? "bg-[var(--color-brand)] text-white shadow-2xs"
@@ -157,6 +197,31 @@ export default function MasterPage() {
               {label}
             </button>
           ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label
+            htmlFor="master-cedant-filter"
+            className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-ink-muted)]"
+          >
+            Cedant
+          </label>
+          <select
+            id="master-cedant-filter"
+            value={selectedCedant}
+            onChange={(event) => {
+              setSelectedCedant(event.target.value);
+              setPage(0);
+            }}
+            className="max-w-[260px] rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-xs font-medium text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+          >
+            <option value="">Semua Cedant</option>
+            {cedantOptions.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.name} ({option.code})
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Column View Mode Toggle: Core DB Columns vs All Scanned Excel Headers */}
@@ -195,6 +260,12 @@ export default function MasterPage() {
         </div>
       </div>
 
+      {cedantOptionsError && (
+        <div className="text-xs text-[var(--color-danger)]">
+          Daftar mapping cedant tidak dapat dimuat: {cedantOptionsError}
+        </div>
+      )}
+
       {error && (
         <div className="bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 text-[var(--color-danger)] px-4 py-3 rounded-[var(--radius-surface)] text-xs font-medium">
           {error}
@@ -214,6 +285,9 @@ export default function MasterPage() {
             <Badge tone="brand">
               {totalRows.toLocaleString("id-ID")} rows
             </Badge>
+            {selectedCedantName && (
+              <Badge tone="valid">{selectedCedantName}</Badge>
+            )}
             {columnView === "all" && scannedHeaders.length > 0 && (
               <Badge tone="valid" dot>
                 {scannedHeaders.length} Scanned Headers Active
@@ -263,7 +337,7 @@ export default function MasterPage() {
                   <th className="px-4 py-3 text-left whitespace-nowrap">Sheet</th>
                   {activeTab === "os" ? (
                     <>
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Loss Ref (doc_no)</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Loss Ref</th>
                       <th className="px-4 py-3 text-right whitespace-nowrap">Outstanding</th>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Currency</th>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Date of Loss</th>

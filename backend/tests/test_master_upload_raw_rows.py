@@ -8,6 +8,7 @@ from app.routers.master import (
     _has_cedant_result_values,
     _load_column_mapping,
     _raw_primary_key,
+    get_column_mappings,
 )
 
 
@@ -61,6 +62,74 @@ class WorkflowCedantValidationTests(unittest.TestCase):
 
 
 class CedantMappingProfileTests(unittest.TestCase):
+    def test_database_dataset_type_keeps_os_insured_mapping_in_os_profiles(self):
+        os_rows = [
+            {
+                "cedant_code": "LC011",
+                "cedant_name": "ACA",
+                "excel_name": "DocNo",
+                "field_name": "loss_ref",
+                "dataset_type": "OS CEDANT",
+                "mapping_version": 1,
+                "argument": {},
+            },
+            {
+                "cedant_code": "LC011",
+                "cedant_name": "ACA",
+                "excel_name": "Amount_Net_OS",
+                "field_name": "outstanding",
+                "dataset_type": "OS CEDANT",
+                "mapping_version": 1,
+                "argument": {},
+            },
+            {
+                "cedant_code": "LC011",
+                "cedant_name": "ACA",
+                "excel_name": "Name_TTG",
+                "field_name": "insured",
+                "dataset_type": "OS CEDANT",
+                "mapping_version": 1,
+                "argument": {},
+            },
+        ]
+
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, *_args, **_kwargs):
+                query_text = str(query)
+                if "master_mapping_column" in query_text:
+                    return FakeResult(os_rows)
+                if "upload_table" in query_text:
+                    return FakeResult([])
+                return FakeResult(
+                    [{"cedant_code": "LC011", "cedant_name": "ACA"}]
+                )
+
+        result = get_column_mappings(FakeDatabase())
+        os_profiles = [
+            profile
+            for profile in result["profiles"]
+            if profile["tipe_data"] == "OS Cedant"
+        ]
+        infopack_profiles = [
+            profile
+            for profile in result["profiles"]
+            if profile["tipe_data"] == "Infopack"
+        ]
+
+        self.assertEqual(len(os_profiles), 1)
+        self.assertEqual(os_profiles[0]["mapping"]["title"], "Name_TTG")
+        self.assertEqual(infopack_profiles, [])
+
     def test_profiles_choose_one_complete_version_per_sheet_without_merging_old_rules(self):
         def rule(version, field, header, sheet):
             return {
@@ -134,6 +203,45 @@ class CedantMappingProfileTests(unittest.TestCase):
         self.assertEqual(
             _load_column_mapping(FakeDatabase(), "LC011", "Claims", False),
             {"doc_no": "New Ref", "outstanding": "New OS"},
+        )
+
+    def test_column_mapping_falls_back_to_confirmed_upload_history(self):
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, *_args, **_kwargs):
+                if "master_mapping_column" in str(query):
+                    return FakeResult([])
+                return FakeResult(
+                    [
+                        {
+                            "mapping_version": 2,
+                            "applied_mapping": {
+                                "mapping": {
+                                    "loss_ref": "Claim Ref",
+                                    "outstanding": "OS Amount",
+                                    "dol": "Loss Date",
+                                }
+                            },
+                        }
+                    ]
+                )
+
+        self.assertEqual(
+            _load_column_mapping(FakeDatabase(), "LC011", "Claims", False),
+            {
+                "doc_no": "Claim Ref",
+                "outstanding": "OS Amount",
+                "dol": "Loss Date",
+            },
         )
 
 

@@ -3,6 +3,7 @@ import { getColumnMappings } from "../services/api";
 
 export function useColumnMappings() {
   const [profiles, setProfiles] = useState([]);
+  const [cedants, setCedants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dbConnected, setDbConnected] = useState(false);
@@ -19,11 +20,13 @@ export function useColumnMappings() {
         throw new Error(response.db_error || "Koneksi mapping database gagal.");
       }
       setProfiles(response.profiles);
+      setCedants(Array.isArray(response.cedants) ? response.cedants : []);
       setDbConnected(true);
     } catch (e) {
       setError(e.message);
       setDbConnected(false);
       setProfiles([]);
+      setCedants([]);
     } finally {
       setLoading(false);
     }
@@ -33,5 +36,5 @@ export function useColumnMappings() {
     reload();
   }, [reload]);
 
-  return { profiles, loading, error, dbConnected, reload };
+  return { profiles, cedants, loading, error, dbConnected, reload };
 }

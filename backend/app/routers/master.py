@@ -11,7 +11,6 @@ Target tables:
 import json
 import hashlib
 import logging
-<<<<<<< HEAD
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -22,12 +21,6 @@ from typing import Optional
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
-=======
-from typing import List, Optional
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -64,6 +57,42 @@ def _qualified_master_table(table: str) -> str:
     if table not in (CEDANT_TABLE, INFOPACK_TABLE):
         raise ValueError(f"Tabel Master tidak dikenal: {table}")
     return f"{MASTER_SCHEMA}.{table}"
+
+
+def _synchronize_header_library_identity(db: Session) -> None:
+    sequence_name = db.execute(
+        text(
+            "SELECT pg_get_serial_sequence("
+            "'rekonsiliasi.header_library', 'header_id')"
+        )
+    ).scalar_one_or_none()
+    if not sequence_name:
+        raise RuntimeError(
+            "rekonsiliasi.header_library.header_id tidak memiliki identity sequence."
+        )
+
+    db.execute(
+        text("LOCK TABLE rekonsiliasi.header_library IN SHARE ROW EXCLUSIVE MODE")
+    )
+    db.execute(
+        text(
+            "WITH table_state AS ("
+            "SELECT COALESCE(MAX(header_id), 0) AS max_id "
+            "FROM rekonsiliasi.header_library"
+            "), sequence_state AS ("
+            "SELECT last_value FROM pg_sequences "
+            "WHERE to_regclass(format('%I.%I', schemaname, sequencename)) "
+            "= CAST(:sequence_name AS regclass)"
+            ") "
+            "SELECT setval("
+            "CAST(:sequence_name AS regclass), "
+            "GREATEST(table_state.max_id, COALESCE(sequence_state.last_value, 0), 1), "
+            "table_state.max_id > 0 OR COALESCE(sequence_state.last_value, 0) > 0"
+            ") "
+            "FROM table_state CROSS JOIN sequence_state"
+        ),
+        {"sequence_name": sequence_name},
+    )
 
 
 def _columns_for(table: str) -> list:
@@ -236,6 +265,59 @@ def _canonical_field_name(value: str) -> str:
     }.get(normalized, normalized)
 
 
+def _applied_mapping_object(value) -> dict:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Mapping tersimpan pada riwayat upload tidak valid.",
+            ) from exc
+    if not isinstance(value, dict):
+        return {}
+    mapping = value.get("mapping")
+    return mapping if isinstance(mapping, dict) else value
+
+
+def _load_confirmed_upload_mapping(
+    db: Session,
+    cedant_code: str,
+    dataset_type: str,
+    sheet_name: str,
+) -> tuple[Optional[int], dict]:
+    try:
+        rows = db.execute(
+            text(
+                "SELECT t.mapping_version, t.applied_mapping "
+                "FROM rekonsiliasi.upload_table t "
+                "JOIN rekonsiliasi.upload_batch b ON b.batch_id = t.batch_id "
+                "WHERE b.cedant_code = :cedant_code "
+                "AND UPPER(BTRIM(b.dataset_type)) = :dataset_type "
+                "AND t.sheet_name = :sheet_name "
+                "AND t.status = 'ready' AND t.mapping_version IS NOT NULL "
+                "ORDER BY t.mapping_version DESC, t.confirmed_at DESC NULLS LAST, "
+                "t.table_id DESC"
+            ),
+            {
+                "cedant_code": cedant_code,
+                "dataset_type": dataset_type.upper(),
+                "sheet_name": sheet_name,
+            },
+        ).mappings().all()
+    except Exception as exc:
+        logger.exception("Could not load confirmed upload mapping for cedant=%s", cedant_code)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal membaca mapping dari riwayat upload cedant {cedant_code}.",
+        ) from exc
+    for row in rows:
+        mapping = _applied_mapping_object(row.get("applied_mapping"))
+        if mapping:
+            return int(row["mapping_version"]), mapping
+    return None, {}
+
+
 def _normalize_mapping_value(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip()).casefold()
 
@@ -281,6 +363,7 @@ def _load_column_mapping(
             detail=f"Gagal membaca mapping kolom untuk cedant {cedant_code}.",
         ) from exc
 
+    active_mapping = {}
     if not is_infopack:
         by_version: dict[int, dict[str, str]] = {}
         for row in rows:
@@ -310,38 +393,51 @@ def _load_column_mapping(
             )
         for _, version_mapping in sorted(by_version.items(), reverse=True):
             if {"doc_no", "outstanding"} <= version_mapping.keys():
-                return version_mapping
-        return by_version[max(by_version)] if by_version else {}
+                active_mapping = version_mapping
+                break
+        if not active_mapping and by_version:
+            active_mapping = by_version[max(by_version)]
 
-    mapping = {}
-    for row in rows:
-        excel_name = row.get("excel_name") or ""
-        field_name = _canonical_field_name(row.get("field_name") or "")
-        if not excel_name or not field_name:
-            continue
-
-        argument = row.get("argument") or {}
-        if isinstance(argument, str):
-            argument = json.loads(argument)
-        if not isinstance(argument, dict):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Argument mapping untuk cedant {cedant_code} tidak valid.",
-            )
-        sheet_names = argument.get("sheet_names") or []
-        if isinstance(sheet_names, str):
-            sheet_names = [sheet_names]
-
-        if sheet_names and sheet_name:
-            if not any(
-                _normalize_mapping_value(str(sheet)) == _normalize_mapping_value(sheet_name)
-                for sheet in sheet_names
-            ):
+    else:
+        for row in rows:
+            excel_name = row.get("excel_name") or ""
+            field_name = _canonical_field_name(row.get("field_name") or "")
+            if not excel_name or not field_name:
                 continue
 
-        mapping.setdefault(field_name, excel_name)
+            argument = row.get("argument") or {}
+            if isinstance(argument, str):
+                argument = json.loads(argument)
+            if not isinstance(argument, dict):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Argument mapping untuk cedant {cedant_code} tidak valid.",
+                )
+            sheet_names = argument.get("sheet_names") or []
+            if isinstance(sheet_names, str):
+                sheet_names = [sheet_names]
 
-    return mapping
+            if sheet_names and sheet_name:
+                if not any(
+                    _normalize_mapping_value(str(sheet)) == _normalize_mapping_value(sheet_name)
+                    for sheet in sheet_names
+                ):
+                    continue
+
+            active_mapping.setdefault(field_name, excel_name)
+
+    _, stored_mapping = _load_confirmed_upload_mapping(
+        db,
+        cedant_code,
+        "INFOPACK" if is_infopack else "OS CEDANT",
+        sheet_name,
+    )
+    history_mapping = {
+        _canonical_field_name(str(field_name)): str(header).strip()
+        for field_name, header in stored_mapping.items()
+        if header is not None and str(header).strip()
+    }
+    return {**history_mapping, **active_mapping}
 
 
 def _build_os_mapping_profiles(rows: list[dict]) -> list[dict]:
@@ -455,13 +551,96 @@ def get_column_mappings(db: Session = Depends(get_db)):
                 "ORDER BY cedant_name, m.cedant_code, f.field_name"
             )
         ).mappings().all()
+        history_rows = db.execute(
+            text(
+                "SELECT DISTINCT ON (b.cedant_code, "
+                "UPPER(BTRIM(b.dataset_type)), LOWER(BTRIM(t.sheet_name))) "
+                "b.cedant_code, "
+                "COALESCE(NULLIF(BTRIM(c.cedant_name), ''), b.cedant_code) AS cedant_name, "
+                "UPPER(BTRIM(b.dataset_type)) AS dataset_type, t.sheet_name, "
+                "t.mapping_version, t.applied_mapping "
+                "FROM rekonsiliasi.upload_table t "
+                "JOIN rekonsiliasi.upload_batch b ON b.batch_id = t.batch_id "
+                "LEFT JOIN rekonsiliasi.master_oscedant_code c ON c.cedant_code = b.cedant_code "
+                "WHERE t.status = 'ready' AND t.mapping_version IS NOT NULL "
+                "ORDER BY b.cedant_code, UPPER(BTRIM(b.dataset_type)), "
+                "LOWER(BTRIM(t.sheet_name)), t.mapping_version DESC, "
+                "t.confirmed_at DESC NULLS LAST, t.table_id DESC"
+            )
+        ).mappings().all()
+        cedants = db.execute(
+            text(
+                "SELECT DISTINCT ON (cedant_code) cedant_code, "
+                "COALESCE(NULLIF(BTRIM(cedant_name), ''), cedant_code) AS cedant_name "
+                "FROM rekonsiliasi.master_oscedant_code "
+                "WHERE cedant_code IS NOT NULL "
+                "AND LOWER(BTRIM(COALESCE(is_active::text, ''))) "
+                "IN ('active', 'true', 't', '1') "
+                "ORDER BY cedant_code, cedant_name"
+            )
+        ).mappings().all()
     except Exception as exc:
         return {
             "profiles": [],
+            "cedants": [],
             "db_connected": False,
             "db_mode": DB_MODE,
             "db_error": DB_LAST_ERROR or str(exc),
         }
+
+    active_all_sheets = set()
+    active_sheet_scopes = defaultdict(set)
+    for row in rows:
+        key = (
+            row.get("cedant_code") or "",
+            str(row.get("dataset_type") or "").strip().upper(),
+        )
+        argument = row.get("argument") or {}
+        if isinstance(argument, str):
+            argument = json.loads(argument)
+        if not isinstance(argument, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Argument mapping tersimpan tidak valid.",
+            )
+        sheet_names = argument.get("sheet_names") or []
+        if isinstance(sheet_names, str):
+            sheet_names = [sheet_names]
+        normalized_sheets = {
+            _normalize_mapping_value(str(sheet))
+            for sheet in sheet_names
+            if str(sheet).strip()
+        }
+        if normalized_sheets:
+            active_sheet_scopes[key].update(normalized_sheets)
+        else:
+            active_all_sheets.add(key)
+
+    for row in history_rows:
+        cedant_code = row.get("cedant_code") or ""
+        dataset_type = str(row.get("dataset_type") or "").strip().upper()
+        sheet_name = str(row.get("sheet_name") or "").strip()
+        scope_key = (cedant_code, dataset_type)
+        if (
+            scope_key in active_all_sheets
+            or _normalize_mapping_value(sheet_name) in active_sheet_scopes[scope_key]
+        ):
+            continue
+        mapping = _applied_mapping_object(row.get("applied_mapping"))
+        for field_name, excel_name in mapping.items():
+            if not excel_name:
+                continue
+            rows.append(
+                {
+                    "cedant_code": cedant_code,
+                    "cedant_name": row.get("cedant_name") or cedant_code,
+                    "excel_name": str(excel_name).strip(),
+                    "field_name": str(field_name),
+                    "dataset_type": dataset_type,
+                    "mapping_version": row.get("mapping_version"),
+                    "argument": {"sheet_names": [sheet_name]} if sheet_name else {},
+                }
+            )
 
     profiles = {}
     for profile in _build_os_mapping_profiles(rows):
@@ -474,7 +653,8 @@ def get_column_mappings(db: Session = Depends(get_db)):
         profiles[key] = profile
 
     for row in rows:
-        if str(row.get("dataset_type") or "").strip().upper() == "OS CEDANT":
+        dataset_type = str(row.get("dataset_type") or "").strip().upper()
+        if dataset_type == "OS CEDANT":
             continue
         field_name = _canonical_field_name(row.get("field_name") or "")
         excel_name = (row.get("excel_name") or "").strip()
@@ -496,7 +676,7 @@ def get_column_mappings(db: Session = Depends(get_db)):
 
         if key not in profiles:
             profiles[key] = {
-                "tipe_data": "OS Cedant",
+                "tipe_data": "Infopack" if dataset_type == "INFOPACK" else "OS Cedant",
                 "cedant": cedant_name,
                 "cedantCode": cedant_code,
                 "sheetNames": sheet_names,
@@ -513,11 +693,7 @@ def get_column_mappings(db: Session = Depends(get_db)):
     result = []
     for profile in profiles.values():
         field_names = set(profile["mapping"])
-        is_infopack = bool(
-            field_names
-            & {"class_code", "classcode", "title", "insured", "value", "cob", "gross", "tsi"}
-        )
-        profile["tipe_data"] = "Infopack" if is_infopack else "OS Cedant"
+        is_infopack = profile["tipe_data"] == "Infopack"
         profile["lossRef"] = (
             profile["mapping"].get("doc_no")
             or profile["mapping"].get("title")
@@ -532,13 +708,29 @@ def get_column_mappings(db: Session = Depends(get_db)):
         profile["dateOfLoss"] = profile["mapping"].get("dol", "—")
         profile["status"] = (
             "READY"
-            if (is_infopack and field_names & {"class_code", "classcode", "title"})
-            or (not is_infopack and {"doc_no", "outstanding"} <= field_names)
+            if (
+                is_infopack
+                and field_names & {"class_code", "classcode", "title"}
+            )
+            or (
+                not is_infopack
+                and {"doc_no", "outstanding"} <= field_names
+            )
             else "INCOMPLETE"
         )
         result.append(profile)
 
-    return {"profiles": result}
+    return {
+        "profiles": result,
+        "cedants": [
+            {
+                "cedant_code": row["cedant_code"],
+                "cedant_name": row["cedant_name"],
+            }
+            for row in cedants
+        ],
+        "db_connected": True,
+    }
 
 
 def _extract_cedant_row_with_mapping(
@@ -643,7 +835,7 @@ def _resolve_cedant_code(db: Session, cedant_name: str) -> Optional[str]:
 
 
 def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
-    """Resolve a cedant from active mappings when upload form's cedant is blank."""
+    """Resolve a cedant from active or previously confirmed mappings."""
     data = next((row.get("data") for row in rows if row.get("data")), {})
     headers = {_normalize_mapping_value(str(header)) for header in data}
     if not headers:
@@ -661,12 +853,43 @@ def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
                 "AND UPPER(BTRIM(f.dataset_type)) = 'OS CEDANT'"
             )
         ).mappings().all()
+        history_rows = db.execute(
+            text(
+                "SELECT DISTINCT ON (b.cedant_code, LOWER(BTRIM(t.sheet_name))) "
+                "b.cedant_code, c.cedant_name, t.sheet_name, t.applied_mapping "
+                "FROM rekonsiliasi.upload_table t "
+                "JOIN rekonsiliasi.upload_batch b ON b.batch_id = t.batch_id "
+                "LEFT JOIN rekonsiliasi.master_oscedant_code c ON c.cedant_code = b.cedant_code "
+                "WHERE t.status = 'ready' AND t.mapping_version IS NOT NULL "
+                "AND b.cedant_code IS NOT NULL "
+                "AND UPPER(BTRIM(b.dataset_type)) = 'OS CEDANT' "
+                "ORDER BY b.cedant_code, LOWER(BTRIM(t.sheet_name)), "
+                "t.mapping_version DESC, t.confirmed_at DESC NULLS LAST, t.table_id DESC"
+            )
+        ).mappings().all()
     except Exception as exc:
-        logger.exception("Could not detect cedant from active mappings")
+        logger.exception("Could not detect cedant from saved mappings")
         raise HTTPException(
             status_code=500,
-            detail="Gagal mendeteksi cedant dari mapping aktif.",
+            detail="Gagal mendeteksi cedant dari mapping tersimpan.",
         ) from exc
+
+    for history in history_rows:
+        history_mapping = _applied_mapping_object(history.get("applied_mapping"))
+        for field_name, excel_name in history_mapping.items():
+            if not excel_name:
+                continue
+            mappings.append(
+                {
+                    "cedant_code": history.get("cedant_code"),
+                    "cedant_name": history.get("cedant_name"),
+                    "excel_name": str(excel_name).strip(),
+                    "field_name": field_name,
+                    "argument": {
+                        "sheet_names": [history["sheet_name"]]
+                    } if history.get("sheet_name") else {},
+                }
+            )
 
     candidates = {}
     for mapping in mappings:
@@ -785,7 +1008,6 @@ def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
 def _extract_infopack_row(
     r, cedant_code, bulan, tahun, file_name, sheet_name, row_index, col_map=None
 ):
-<<<<<<< HEAD
     data = r.get("data", {})
     col_map = col_map or {}
     normalized_columns = {
@@ -1275,7 +1497,25 @@ def _suggest_existing_mapping(
         reverse=True,
     )
     if not ranked:
-        return None, {}
+        version, stored_mapping = _load_confirmed_upload_mapping(
+            db,
+            cedant_code,
+            dataset_type,
+            sheet_name,
+        )
+        header_lookup = {
+            _normalize_mapping_value(header): header
+            for header in headers
+        }
+        selected = {}
+        for raw_field, raw_header in stored_mapping.items():
+            field_name = _mapping_key(str(raw_field))
+            if field_name not in catalog_fields or not raw_header:
+                continue
+            header = header_lookup.get(_normalize_mapping_value(str(raw_header)))
+            if header:
+                selected[field_name] = header
+        return (version, selected) if selected else (None, {})
     version, selected = ranked[0]
     return version, selected
 
@@ -2186,6 +2426,7 @@ def _save_master_upload(
     ).scalar_one()
 
     if scanned_headers:
+        _synchronize_header_library_identity(db)
         db.execute(
             text(
                 "INSERT INTO rekonsiliasi.header_library "
@@ -2415,17 +2656,11 @@ async def inspect_master_excel(
 ):
     if not file.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
         raise HTTPException(status_code=400, detail="File harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
-=======
-    # ── Validasi format ──
-    if not file.filename.endswith((".xlsx", ".xls", ".xlsb")):
-        raise HTTPException(status_code=400, detail="File harus berformat .xlsx atau .xls")
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 
     file_bytes = await file.read()
     if len(file_bytes) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File melebihi batas 50 MB")
 
-<<<<<<< HEAD
     try:
         info = inspect_excel_workbook(file_bytes)
     except ValueError as e:
@@ -2546,20 +2781,6 @@ async def prepare_master_upload(
         primary_key_col="",
         file_name=file_name,
         cedant=cedant_name,
-=======
-    # ── Buat upload job ──
-    # Normalise primary_key_col: strip unicode whitespace + collapse multiple spaces
-    primary_key_col = ' '.join(primary_key_col.strip().replace('\xa0', ' ').replace('\u200b', '').split())
-
-    job = UploadJob(
-        bulan=bulan,
-        tahun=tahun,
-        tipe_data=tipe_data,
-        primary_key_col=primary_key_col,
-        file_name=file.filename,
-        sheet_name=sheet_name or None,
-        cedant=cedant or None,
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
         status="processing",
     )
     db.add(job)
@@ -2615,12 +2836,16 @@ async def prepare_master_upload(
         ).scalar_one()
         db.commit()
 
+        header_sequence_synchronized = False
         for selected_sheet in selected_sheets:
             sheet_index = available_sheets.index(selected_sheet) + 1
             parsed = ingest_excel_raw(source_bytes, selected_sheet)
             headers = parsed["columns"]
             if not headers:
                 continue
+            if not header_sequence_synchronized:
+                _synchronize_header_library_identity(db)
+                header_sequence_synchronized = True
             existing_version, existing_map = _suggest_existing_mapping(
                 db,
                 resolved_cedant,
@@ -3952,45 +4177,6 @@ def _upload_job_to_dict(j: UploadJob) -> dict:
         "total_rows": j.total_rows, "rows_appended": j.rows_appended,
         "rows_skipped": j.rows_skipped, "error_message": j.error_message,
         "created_at": j.created_at.isoformat() if j.created_at else None,
-    }
-
-
-# ─────────────────────────────────────────────
-# DELETE /api/master/library  (bulk)
-# Body: { "job_ids": [1, 2, 3] }
-# ─────────────────────────────────────────────
-class BulkDeleteRequest(BaseModel):
-    job_ids: List[int]
-
-@router.delete("/library", summary="Hapus beberapa file dari Library sekaligus")
-def bulk_delete_library(
-    body: BulkDeleteRequest,
-    db:   Session = Depends(get_db),
-):
-    if not body.job_ids:
-        raise HTTPException(status_code=400, detail="job_ids tidak boleh kosong")
-
-    jobs = db.query(UploadJob).filter(UploadJob.id.in_(body.job_ids)).all()
-    if not jobs:
-        raise HTTPException(status_code=404, detail="Tidak ada job yang ditemukan")
-
-    found_ids = [j.id for j in jobs]
-
-    # Remove associated master rows
-    rows_deleted = (
-        db.query(MasterData)
-        .filter(MasterData.source_job_id.in_(found_ids))
-        .delete(synchronize_session=False)
-    )
-
-    for job in jobs:
-        db.delete(job)
-    db.commit()
-
-    return {
-        "message":      f"{len(jobs)} file berhasil dihapus dari Library.",
-        "jobs_deleted": len(jobs),
-        "rows_deleted": rows_deleted,
     }
 
 

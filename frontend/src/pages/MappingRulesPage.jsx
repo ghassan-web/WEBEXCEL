@@ -95,7 +95,7 @@ export default function MappingRulesPage() {
                 Mapping Rules &mdash; {activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}
               </h2>
               <p className="text-xs text-gray-400 mt-1 max-w-xl">
-                Mapping aktif dibaca langsung dari tabel <code>master_upload_column_mapping</code>.
+                Mapping aktif dibaca langsung dari tabel <code>master_mapping_column</code> dan field referensinya.
               </p>
             </div>
           </div>
@@ -113,9 +113,9 @@ export default function MappingRulesPage() {
             <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Mapping database</span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-xs text-teal-700 font-mono">master_upload_column_mapping</span>
+            <span className="text-xs text-teal-700 font-mono">master_mapping_column</span>
             <span className="ml-auto text-xs text-gray-500">
-              {loading ? "Memuat…" : `${allProfiles.length} profil aktif`}
+              {loading ? "Memuat…" : `${profiles.length} profil`}
             </span>
           </div>
 

@@ -18,3 +18,4 @@ export { Tabs, TabsList, TabsTrigger, TabsContent } from "./Tabs";
 export { default as Skeleton } from "./Skeleton";
 export { default as EmptyState } from "./EmptyState";
 export { default as ErrorState } from "./ErrorState";
+export { default as MetricTile } from "./MetricTile";

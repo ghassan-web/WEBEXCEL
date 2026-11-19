@@ -7,7 +7,10 @@
  *   header (or as a query param for window.location.href downloads).
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE_URL =
+  import.meta.env.VITE_API_BASE_RU_CLAIMS_URL?.trim() ||
+  import.meta.env.VITE_API_URL?.trim() ||
+  "http://localhost:8000";
 
 // ─── Session ID helpers ───────────────────────────────────────────────────────
 

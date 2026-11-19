@@ -5,6 +5,7 @@ import {
   deleteLibraryEntry,
   getMasterData,
 } from "../services/api";
+import { PageHeader, Card, Button, Badge, MetricTile } from "../components/ui";
 import {
   BookOpenIcon,
   ArrowPathIcon,
@@ -15,9 +16,7 @@ import {
   DocumentIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
-  ClockIcon,
   FunnelIcon,
-  ArrowDownTrayIcon,
   TableCellsIcon,
 } from "@heroicons/react/24/outline";
 
@@ -25,26 +24,13 @@ const PAGE_SIZE = 20;
 const HEADER_PAGE_SIZE = 50;
 
 const STATUS_STYLE = {
-  done:       "bg-emerald-100 text-emerald-700 border border-emerald-200",
-  processing: "bg-amber-100   text-amber-700   border border-amber-200",
-  error:      "bg-red-100     text-red-700     border border-red-200",
-  pending:    "bg-gray-100    text-gray-500    border border-gray-200",
+  done:       "bg-[var(--color-valid-soft)] text-[var(--color-valid)] border border-[var(--color-valid)]/25",
+  processing: "bg-[var(--color-warning-soft)] text-[var(--color-warning)] border border-[var(--color-warning)]/25",
+  error:      "bg-[var(--color-danger-soft)] text-[var(--color-danger)] border border-[var(--color-danger)]/25",
+  pending:    "bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] border border-[var(--color-line)]",
 };
 const STATUS_LABEL = { done:"SUCCESS", processing:"PROCESSING", error:"ERROR", pending:"PENDING" };
-const STATUS_DOT   = { done:"bg-emerald-500", processing:"bg-amber-500 animate-pulse", error:"bg-red-500", pending:"bg-gray-400" };
-
-/* ── tiny stat card ── */
-function StatCard({ label, value, sub, color = "text-gray-800", bg = "bg-gray-50" }) {
-  return (
-    <div className={`${bg} rounded-2xl border border-gray-100 px-5 py-4 flex flex-col gap-1`}>
-      <p className="text-xs text-gray-500 font-medium">{label}</p>
-      <p className={`text-3xl font-extrabold leading-none tracking-tight ${color}`}>
-        {value?.toLocaleString("id-ID") ?? "—"}
-      </p>
-      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
-    </div>
-  );
-}
+const STATUS_DOT   = { done:"bg-[var(--color-valid)]", processing:"bg-[var(--color-warning)] animate-pulse", error:"bg-[var(--color-danger)]", pending:"bg-[var(--color-ink-faint)]" };
 
 /* ── confirm modal ── */
 function ConfirmModal({ file, onConfirm, onCancel, loading }) {
@@ -129,160 +115,152 @@ function HeaderLibraryView({ activeTab }) {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">
-          HEADER CATALOG
-        </p>
-        <h2 className="text-2xl font-extrabold text-gray-800">Header Library</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          Satu baris per header pada setiap sheet upload. Header berulang tetap disimpan.
-        </p>
-      </div>
-
+    <Card
+      title="Header Library"
+      description="Satu baris per header pada setiap sheet upload. Header berulang tetap disimpan."
+      badge={`${data.total.toLocaleString("id-ID")} header`}
+      actions={
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={ArrowPathIcon}
+          loading={loading}
+          onClick={load}
+        >
+          Refresh
+        </Button>
+      }
+      padding="none"
+    >
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+        <div className="m-4 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] px-4 py-3 rounded-[var(--radius-control)] text-xs font-medium">
           {error}
         </div>
       )}
 
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-gray-100 flex flex-wrap items-center gap-3">
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && applyFilters()}
-            placeholder="Cari header, file, atau sheet…"
-            aria-label="Cari header, file, atau sheet"
-            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-64"
-          />
-          <input
-            type="text"
-            value={cedantInput}
-            onChange={(event) => setCedantInput(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && applyFilters()}
-            placeholder="Kode cedant (opsional)"
-            aria-label="Filter kode cedant"
-            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-48"
-          />
-          <button
-            type="button"
-            onClick={applyFilters}
-            className="px-3 py-1.5 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-lg"
-          >
-            Terapkan
-          </button>
-          <button
-            type="button"
-            onClick={load}
-            disabled={loading}
-            className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg disabled:opacity-40"
-          >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
-          <span className="text-xs text-gray-500">
+      <div className="px-5 py-3.5 border-b border-[var(--color-line)] flex flex-wrap items-center gap-3 bg-[var(--color-surface)]">
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && applyFilters()}
+          placeholder="Cari header, file, atau sheet…"
+          aria-label="Cari header, file, atau sheet"
+          className="px-3 py-1.5 h-9 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)] bg-[var(--color-surface-sunken)] text-[var(--color-ink)] w-64"
+        />
+        <input
+          type="text"
+          value={cedantInput}
+          onChange={(event) => setCedantInput(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && applyFilters()}
+          placeholder="Kode cedant (opsional)"
+          aria-label="Filter kode cedant"
+          className="px-3 py-1.5 h-9 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)] bg-[var(--color-surface-sunken)] text-[var(--color-ink)] w-48"
+        />
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={applyFilters}
+        >
+          Terapkan
+        </Button>
+      </div>
+
+      <div className="overflow-x-auto table-scroll">
+        <table className="min-w-full text-xs">
+          <thead>
+            <tr className="border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)]">
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Cedant</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">File</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Batch / Table ID</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Sheet</th>
+              <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Index</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Original Header</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Mapping Version</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Waktu Upload</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--color-line)]/60">
+            {loading && (
+              <tr>
+                <td colSpan={8} className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse">
+                  Memuat header…
+                </td>
+              </tr>
+            )}
+            {!loading && headers.length === 0 && (
+              <tr>
+                <td colSpan={8} className="text-center py-12 text-[var(--color-ink-muted)]">
+                  Belum ada header yang cocok dengan filter.
+                </td>
+              </tr>
+            )}
+            {!loading && headers.map((header) => (
+              <tr key={header.header_id} className="hover:bg-[var(--color-surface-sunken)]/60 transition-colors">
+                <td className="px-4 py-2.5 font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                  {header.cedant_name || header.cedant_code || "—"}
+                  {header.cedant_code && (
+                    <span className="ml-1 text-[var(--color-ink-muted)] font-mono">({header.cedant_code})</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-[var(--color-ink-body)] max-w-[240px] truncate" title={header.file_name}>
+                  {header.file_name}
+                </td>
+                <td className="px-4 py-2.5 font-mono text-[var(--color-ink-muted)] whitespace-nowrap">
+                  {header.batch_id} / {header.table_id}
+                </td>
+                <td className="px-4 py-2.5 text-[var(--color-ink-muted)] whitespace-nowrap">{header.sheet_name}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-[var(--color-ink-muted)]">{header.column_index}</td>
+                <td className="px-4 py-2.5 font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                  {header.original_header}
+                </td>
+                <td className="px-4 py-2.5 text-[var(--color-ink-muted)]">
+                  {header.mapping_version ?? "Belum dikonfirmasi"}
+                </td>
+                <td className="px-4 py-2.5 text-[var(--color-ink-muted)] whitespace-nowrap">
+                  {header.uploaded_at
+                    ? new Date(header.uploaded_at).toLocaleString("id-ID", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {totalPages > 1 && (
+        <div className="px-5 py-3 bg-[var(--color-surface-sunken)] border-t border-[var(--color-line)] flex items-center justify-between">
+          <span className="text-xs text-[var(--color-ink-muted)]">
+            {page * HEADER_PAGE_SIZE + 1}–{Math.min((page + 1) * HEADER_PAGE_SIZE, data.total)} dari{" "}
             {data.total.toLocaleString("id-ID")} header
           </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-xs">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant</th>
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">File</th>
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Batch / Table ID</th>
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Sheet</th>
-                <th className="px-4 py-2.5 text-right font-semibold text-gray-500 uppercase tracking-wide">Index</th>
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Original Header</th>
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Mapping Version</th>
-                <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Waktu Upload</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {loading && (
-                <tr>
-                  <td colSpan={8} className="text-center py-12 text-gray-400 animate-pulse">
-                    Memuat header…
-                  </td>
-                </tr>
-              )}
-              {!loading && headers.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="text-center py-12 text-gray-400">
-                    Belum ada header yang cocok dengan filter.
-                  </td>
-                </tr>
-              )}
-              {!loading && headers.map((header) => (
-                <tr key={header.header_id} className="hover:bg-teal-50/30">
-                  <td className="px-4 py-2.5 font-semibold text-gray-700 whitespace-nowrap">
-                    {header.cedant_name || header.cedant_code || "—"}
-                    {header.cedant_code && (
-                      <span className="ml-1 text-gray-400 font-mono">({header.cedant_code})</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-700 max-w-[240px] truncate" title={header.file_name}>
-                    {header.file_name}
-                  </td>
-                  <td className="px-4 py-2.5 font-mono text-gray-500 whitespace-nowrap">
-                    {header.batch_id} / {header.table_id}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{header.sheet_name}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-gray-500">{header.column_index}</td>
-                  <td className="px-4 py-2.5 font-mono font-semibold text-gray-800 whitespace-nowrap">
-                    {header.original_header}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-500">
-                    {header.mapping_version ?? "Belum dikonfirmasi"}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
-                    {header.uploaded_at
-                      ? new Date(header.uploaded_at).toLocaleString("id-ID", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {totalPages > 1 && (
-          <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-            <span className="text-xs text-gray-500">
-              {page * HEADER_PAGE_SIZE + 1}–{Math.min((page + 1) * HEADER_PAGE_SIZE, data.total)} dari{" "}
-              {data.total.toLocaleString("id-ID")} header
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPage((current) => Math.max(0, current - 1))}
-                disabled={page === 0 || loading}
-                className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50"
-                aria-label="Halaman sebelumnya"
-              >
-                <ChevronLeftIcon className="h-3.5 w-3.5 text-gray-600" />
-              </button>
-              <span className="text-xs font-semibold text-gray-600">{page + 1} / {totalPages}</span>
-              <button
-                type="button"
-                onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
-                disabled={page >= totalPages - 1 || loading}
-                className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50"
-                aria-label="Halaman berikutnya"
-              >
-                <ChevronRightIcon className="h-3.5 w-3.5 text-gray-600" />
-              </button>
-            </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              disabled={page === 0 || loading}
+              className="p-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)]"
+              aria-label="Halaman sebelumnya"
+            >
+              <ChevronLeftIcon className="h-3.5 w-3.5 text-[var(--color-ink-body)]" />
+            </button>
+            <span className="text-xs font-semibold font-mono text-[var(--color-ink)]">{page + 1} / {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
+              disabled={page >= totalPages - 1 || loading}
+              className="p-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)]"
+              aria-label="Halaman berikutnya"
+            >
+              <ChevronRightIcon className="h-3.5 w-3.5 text-[var(--color-ink-body)]" />
+            </button>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -369,45 +347,45 @@ export default function LibraryPage({ initialTab }) {
   const errorCount    = files.filter(f => f.status === "error").length;
 
   return (
-    <div className="flex-1 flex flex-col bg-gray-50 overflow-auto">
+    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans text-[var(--color-ink)] saas-page-enter">
+      <PageHeader
+        title="File & Header Library"
+        description="Kelola riwayat berkas Excel yang telah masuk ke Master Data dan katalog header hasil pemindaian per cedant."
+        actions={
+          libraryView === "files" ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ArrowPathIcon}
+              loading={loading}
+              onClick={load}
+            >
+              Refresh
+            </Button>
+          ) : null
+        }
+      />
 
-      {/* ── Header ── */}
-      <div className="page-header">
-        <div className="h-8 w-8 rounded-xl bg-teal-600 flex items-center justify-center flex-shrink-0">
-          <BookOpenIcon className="h-4 w-4 text-white" />
-        </div>
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-teal-600">FILE MANAGEMENT</p>
-          <h1 className="text-base font-bold text-gray-800 leading-tight">Library</h1>
-        </div>
-        {libraryView === "files" && (
-          <button onClick={load} disabled={loading}
-            className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40">
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            ↺ Refresh
-          </button>
-        )}
-      </div>
-
-      <div className="px-6 py-6 flex flex-col gap-5 max-w-7xl w-full">
-
-        {/* ── Tabs ── */}
-        <div className="flex gap-0 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
-          {["OS Cedant", "Infopack"].map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={[
-                "px-5 py-1.5 rounded-lg text-sm font-medium transition-all",
+      {/* Tabs & View Switcher */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex bg-[var(--color-surface)] p-1 rounded-[var(--radius-control)] border border-[var(--color-line)] shadow-sm">
+          {["OS Cedant", "Infopack"].map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold transition-all cursor-pointer ${
                 activeTab === tab
-                  ? "bg-white shadow text-teal-700 font-semibold border border-gray-200"
-                  : "text-gray-500 hover:text-gray-700",
-              ].join(" ")}
+                  ? "bg-[var(--color-brand)] text-white shadow-sm"
+                  : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              }`}
             >
               {tab === "OS Cedant" ? "OS Claim Cedant" : "InfoPack"}
             </button>
           ))}
         </div>
 
-        <div className="flex gap-1 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
+        <div className="flex bg-[var(--color-surface)] p-1 rounded-[var(--radius-control)] border border-[var(--color-line)] shadow-sm">
           {[
             ["files", "File Uploads"],
             ["headers", "Header Library"],
@@ -416,242 +394,256 @@ export default function LibraryPage({ initialTab }) {
               key={view}
               type="button"
               onClick={() => setLibraryView(view)}
-              className={[
-                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all",
+              className={`px-4 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold transition-all cursor-pointer ${
                 libraryView === view
-                  ? "bg-teal-600 text-white shadow-sm"
-                  : "text-gray-500 hover:text-gray-700",
-              ].join(" ")}
+                  ? "bg-[var(--color-brand)] text-white shadow-sm"
+                  : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              }`}
             >
               {label}
             </button>
           ))}
         </div>
-
-        {libraryView === "headers" ? (
-          <HeaderLibraryView activeTab={activeTab} />
-        ) : (
-          <>
-        {/* ── Section title ── */}
-        <div>
-          <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">FILE MANAGEMENT</p>
-          <h2 className="text-2xl font-extrabold text-gray-800">
-            Library — {activeTab === "OS Cedant" ? "OS Claim Cedant" : "InfoPack"}
-          </h2>
-          <p className="text-xs text-gray-400 mt-1">
-            Semua file yang sudah diupload ke Master. Setiap baris mewakili satu file upload.
-          </p>
-        </div>
-
-        {/* ── Stat cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Total File Diupload" value={totalFiles}    sub="Semua upload job"           color="text-gray-800"    bg="bg-white" />
-          <StatCard label="Total Baris di Master" value={masterTotal} sub="Akumulasi seluruh upload"   color="text-teal-700"    bg="bg-teal-50" />
-          <StatCard label="Baris Ditambahkan"    value={totalAppended} sub="Dari halaman ini"          color="text-emerald-700" bg="bg-emerald-50" />
-          <StatCard label="Error Upload"         value={errorCount}   sub={errorCount > 0 ? "Perlu diulang" : "Semua berhasil"} color={errorCount > 0 ? "text-red-600" : "text-gray-400"} bg={errorCount > 0 ? "bg-red-50" : "bg-white"} />
-        </div>
-
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">{error}</div>
-        )}
-
-        {/* ── Main card ── */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-
-          {/* Toolbar */}
-          <div className="px-5 py-3.5 border-b border-gray-100 flex flex-wrap items-center gap-3">
-
-            {/* Search */}
-            <div className="relative">
-              <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-              <input
-                type="text"
-                value={searchInput}
-                onChange={e => setSearchInput(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && setSearch(searchInput)}
-                placeholder="Cari nama file, cedant, periode…"
-                className="pl-8 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white w-56"
-              />
-            </div>
-
-            {/* Status filter */}
-            <div className="flex items-center gap-1.5">
-              <FunnelIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-              <div className="flex gap-1">
-                {[
-                  { key: "all",   label: "Semua" },
-                  { key: "done",  label: "Success" },
-                  { key: "error", label: "Error" },
-                ].map(f => (
-                  <button key={f.key} onClick={() => setStatusFilter(f.key)}
-                    className={[
-                      "px-2.5 py-1 rounded-lg text-xs font-medium transition-colors",
-                      statusFilter === f.key ? "bg-teal-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200",
-                    ].join(" ")}>
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex-1" />
-            <span className="text-xs text-gray-400">{filtered.length} file</span>
-          </div>
-
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">File</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Periode</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Sheet</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Primary Key</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-teal-600 uppercase tracking-wide">Ditambahkan</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray-500 uppercase tracking-wide">Dilewati</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray-500 uppercase tracking-wide">Total Baris</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Waktu Upload</th>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Aksi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {loading && (
-                  <tr><td colSpan={11} className="text-center py-12 text-gray-400 animate-pulse">Memuat…</td></tr>
-                )}
-                {!loading && filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={11} className="text-center py-16">
-                      <div className="flex flex-col items-center gap-2 text-gray-400">
-                        <BookOpenIcon className="h-10 w-10 text-gray-200" />
-                        <p className="font-medium">Library kosong</p>
-                        <p className="text-xs">Upload file terlebih dahulu dari halaman Upload.</p>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                {!loading && filtered.map(f => (
-                  <tr key={f.id} className="hover:bg-teal-50/20 transition-colors group">
-                    {/* File */}
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2 max-w-[220px]">
-                        <DocumentIcon className="h-4 w-4 text-teal-500 flex-shrink-0" />
-                        <span className="truncate text-gray-800 font-medium text-xs" title={f.file_name}>
-                          {f.file_name}
-                        </span>
-                      </div>
-                    </td>
-                    {/* Cedant */}
-                    <td className="px-4 py-2.5 font-semibold text-gray-700 whitespace-nowrap">
-                      {f.cedant || <span className="text-gray-300 font-normal italic">—</span>}
-                    </td>
-                    {/* Periode */}
-                    <td className="px-4 py-2.5 whitespace-nowrap">
-                      {f.bulan && f.tahun ? (
-                        <span className="bg-teal-50 text-teal-700 border border-teal-100 px-2 py-0.5 rounded-lg text-[10px] font-semibold">
-                          {f.bulan}/{f.tahun}
-                        </span>
-                      ) : <span className="text-gray-300">—</span>}
-                    </td>
-                    {/* Sheet */}
-                    <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
-                      {f.sheet_name || <span className="text-gray-300 italic">Default</span>}
-                    </td>
-                    {/* Primary Key */}
-                    <td className="px-4 py-2.5">
-                      <code className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
-                        {f.primary_key_col}
-                      </code>
-                    </td>
-                    {/* Ditambahkan */}
-                    <td className="px-4 py-2.5 text-right font-semibold text-teal-700">
-                      {f.rows_appended?.toLocaleString("id-ID") ?? "—"}
-                    </td>
-                    {/* Dilewati */}
-                    <td className="px-4 py-2.5 text-right text-gray-400">
-                      {f.rows_skipped?.toLocaleString("id-ID") ?? "—"}
-                    </td>
-                    {/* Total */}
-                    <td className="px-4 py-2.5 text-right text-gray-600 font-medium">
-                      {f.total_rows?.toLocaleString("id-ID") ?? "—"}
-                    </td>
-                    {/* Status */}
-                    <td className="px-4 py-2.5">
-                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_STYLE[f.status] ?? "bg-gray-100 text-gray-500"}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${STATUS_DOT[f.status] ?? "bg-gray-400"}`} />
-                        {STATUS_LABEL[f.status] ?? f.status?.toUpperCase()}
-                      </span>
-                    </td>
-                    {/* Waktu */}
-                    <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
-                      {f.created_at
-                        ? <>
-                            <span className="block">{new Date(f.created_at).toLocaleDateString("id-ID", { day:"2-digit", month:"short", year:"numeric" })}</span>
-                            <span className="block text-[10px] text-gray-400">{new Date(f.created_at).toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit" })}</span>
-                          </>
-                        : "—"}
-                    </td>
-                    {/* Aksi */}
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2 opacity-40 group-hover:opacity-100 transition-opacity">
-                        {f.status === "error" && (
-                          <span className="text-[10px] text-red-400 italic max-w-[100px] truncate" title={f.error_message}>
-                            {f.error_message?.slice(0, 30)}
-                          </span>
-                        )}
-                        <button
-                          onClick={() => setConfirmFile(f)}
-                          className="text-gray-400 hover:text-red-500 transition-colors p-0.5"
-                          title="Hapus dari Library"
-                          aria-label={`Hapus ${f.file_name}`}
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-              <span className="text-xs text-gray-400">
-                Halaman {page + 1} / {totalPages} · {total} total file
-              </span>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setPage(p => Math.max(0, p-1))} disabled={page === 0 || loading}
-                  className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50 transition-colors">
-                  <ChevronLeftIcon className="h-3.5 w-3.5 text-gray-600" />
-                </button>
-                <span className="text-xs font-semibold text-gray-600 min-w-[60px] text-center">{page+1} / {totalPages}</span>
-                <button onClick={() => setPage(p => Math.min(totalPages-1, p+1))} disabled={page >= totalPages-1 || loading}
-                  className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50 transition-colors">
-                  <ChevronRightIcon className="h-3.5 w-3.5 text-gray-600" />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── Info box ── */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-3.5 flex items-center gap-3 text-xs text-gray-500">
-          <TableCellsIcon className="h-4 w-4 text-teal-500 flex-shrink-0" />
-          <span>
-            Library menampilkan riwayat per-file upload. Untuk melihat semua baris data yang tersimpan, buka halaman{" "}
-            <strong className="text-teal-600">Master</strong> di sidebar.
-            Menghapus file dari Library juga menghapus baris datanya dari Master.
-          </span>
-        </div>
-          </>
-        )}
-
       </div>
 
-      {/* ── Confirm delete modal ── */}
+      {libraryView === "headers" ? (
+        <HeaderLibraryView activeTab={activeTab} />
+      ) : (
+        <>
+          {/* KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <MetricTile
+              label="Total File Diupload"
+              value={totalFiles.toLocaleString("id-ID")}
+              hint="Semua upload job"
+              icon={BookOpenIcon}
+              accent="brand"
+              loading={loading}
+            />
+            <MetricTile
+              label="Total Baris di Master"
+              value={masterTotal.toLocaleString("id-ID")}
+              hint="Akumulasi seluruh upload"
+              icon={TableCellsIcon}
+              accent="premi"
+              loading={loading}
+            />
+            <MetricTile
+              label="Baris Ditambahkan"
+              value={totalAppended.toLocaleString("id-ID")}
+              hint="Dari halaman aktif ini"
+              icon={CheckCircleIcon}
+              accent="valid"
+              loading={loading}
+            />
+            <MetricTile
+              label="Error Upload"
+              value={errorCount.toLocaleString("id-ID")}
+              hint={errorCount > 0 ? "Perlu diulang" : "Semua berhasil"}
+              icon={ExclamationTriangleIcon}
+              accent={errorCount > 0 ? "danger" : "ink"}
+              loading={loading}
+            />
+          </div>
+
+          {error && (
+            <div className="bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] px-4 py-3 rounded-[var(--radius-control)] text-xs font-medium">
+              {error}
+            </div>
+          )}
+
+          {/* Main File Uploads Card */}
+          <Card
+            title={`File Uploads — ${activeTab === "OS Cedant" ? "OS Claim Cedant" : "InfoPack"}`}
+            description="Semua file yang sudah diupload ke Master. Setiap baris mewakili satu file upload."
+            badge={`${filtered.length} file`}
+            padding="none"
+          >
+            {/* Toolbar */}
+            <div className="px-5 py-3.5 border-b border-[var(--color-line)] flex flex-wrap items-center gap-3 bg-[var(--color-surface)]">
+              <div className="relative">
+                <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-ink-muted)]" />
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && setSearch(searchInput)}
+                  placeholder="Cari nama file, cedant, periode…"
+                  className="pl-8 pr-3 h-9 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)] bg-[var(--color-surface-sunken)] text-[var(--color-ink)] w-60"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <FunnelIcon className="h-3.5 w-3.5 text-[var(--color-ink-muted)] shrink-0" />
+                <div className="flex gap-1">
+                  {[
+                    { key: "all", label: "Semua" },
+                    { key: "done", label: "Success" },
+                    { key: "error", label: "Error" },
+                  ].map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => setStatusFilter(f.key)}
+                      className={`px-2.5 py-1 rounded-[var(--radius-control)] text-xs font-semibold transition-colors cursor-pointer ${
+                        statusFilter === f.key
+                          ? "bg-[var(--color-brand)] text-white"
+                          : "bg-[var(--color-surface-sunken)] text-[var(--color-ink-body)] hover:text-[var(--color-ink)] border border-[var(--color-line)]"
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto table-scroll">
+              <table className="min-w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)]">
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">File</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Cedant</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Periode</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Sheet</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Primary Key</th>
+                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-brand)] uppercase tracking-wider">Ditambahkan</th>
+                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Dilewati</th>
+                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Total Baris</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Waktu Upload</th>
+                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-line)]/60">
+                  {loading && (
+                    <tr><td colSpan={11} className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse">Memuat…</td></tr>
+                  )}
+                  {!loading && filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className="text-center py-16">
+                        <div className="flex flex-col items-center gap-2 text-[var(--color-ink-muted)]">
+                          <BookOpenIcon className="h-10 w-10 text-[var(--color-ink-faint)]" />
+                          <p className="font-semibold text-[var(--color-ink)]">Library kosong</p>
+                          <p className="text-xs">Upload file terlebih dahulu dari halaman Upload Data.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {!loading && filtered.map((f) => (
+                    <tr key={f.id} className="hover:bg-[var(--color-surface-sunken)]/60 transition-colors group">
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2 max-w-[220px]">
+                          <DocumentIcon className="h-4 w-4 text-[var(--color-brand)] shrink-0" />
+                          <span className="truncate text-[var(--color-ink)] font-medium text-xs" title={f.file_name}>
+                            {f.file_name}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                        {f.cedant || <span className="text-[var(--color-ink-faint)] font-normal italic">—</span>}
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        {f.bulan && f.tahun ? (
+                          <Badge tone="brand">{f.bulan}/{f.tahun}</Badge>
+                        ) : <span className="text-[var(--color-ink-faint)]">—</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-[var(--color-ink-muted)] whitespace-nowrap">
+                        {f.sheet_name || <span className="text-[var(--color-ink-faint)] italic">Default</span>}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <code className="text-[11px] bg-[var(--color-surface-sunken)] border border-[var(--color-line)] text-[var(--color-ink-body)] px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
+                          {f.primary_key_col}
+                        </code>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-semibold font-mono text-[var(--color-brand)]">
+                        {f.rows_appended?.toLocaleString("id-ID") ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-[var(--color-ink-muted)]">
+                        {f.rows_skipped?.toLocaleString("id-ID") ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-[var(--color-ink)] font-medium">
+                        {f.total_rows?.toLocaleString("id-ID") ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_STYLE[f.status] ?? "bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)]"}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${STATUS_DOT[f.status] ?? "bg-[var(--color-ink-faint)]"}`} />
+                          {STATUS_LABEL[f.status] ?? f.status?.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-[var(--color-ink-muted)] whitespace-nowrap">
+                        {f.created_at
+                          ? <>
+                              <span className="block">{new Date(f.created_at).toLocaleDateString("id-ID", { day:"2-digit", month:"short", year:"numeric" })}</span>
+                              <span className="block text-[10px] font-mono text-[var(--color-ink-faint)]">{new Date(f.created_at).toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit" })}</span>
+                            </>
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                          {f.status === "error" && (
+                            <span className="text-[10px] text-[var(--color-danger)] italic max-w-[100px] truncate" title={f.error_message}>
+                              {f.error_message?.slice(0, 30)}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setConfirmFile(f)}
+                            className="text-[var(--color-ink-muted)] hover:text-[var(--color-danger)] transition-colors p-0.5 cursor-pointer"
+                            title="Hapus dari Library"
+                            aria-label={`Hapus ${f.file_name}`}
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="px-5 py-3 bg-[var(--color-surface-sunken)] border-t border-[var(--color-line)] flex items-center justify-between">
+                <span className="text-xs text-[var(--color-ink-muted)]">
+                  Halaman {page + 1} / {totalPages} &middot; {total} total file
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={page === 0 || loading}
+                    className="p-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)] transition-colors"
+                  >
+                    <ChevronLeftIcon className="h-3.5 w-3.5 text-[var(--color-ink-body)]" />
+                  </button>
+                  <span className="text-xs font-semibold font-mono text-[var(--color-ink)] min-w-[60px] text-center">{page + 1} / {totalPages}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={page >= totalPages - 1 || loading}
+                    className="p-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)] transition-colors"
+                  >
+                    <ChevronRightIcon className="h-3.5 w-3.5 text-[var(--color-ink-body)]" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          <div className="bg-[var(--color-brand-soft)] border border-[var(--color-brand-line)] rounded-[var(--radius-surface)] px-5 py-3.5 flex items-center gap-3 text-xs text-[var(--color-ink-body)]">
+            <TableCellsIcon className="h-4 w-4 text-[var(--color-brand)] shrink-0" />
+            <span>
+              Library menampilkan riwayat per-file upload. Untuk melihat semua baris data yang tersimpan, buka halaman{" "}
+              <strong className="text-[var(--color-brand)]">Master Data</strong> di sidebar.
+              Menghapus file dari Library juga menghapus baris datanya dari Master.
+            </span>
+          </div>
+        </>
+      )}
+
+      {/* Confirm delete modal */}
       {confirmFile && (
         <ConfirmModal
           file={confirmFile}
@@ -661,21 +653,22 @@ export default function LibraryPage({ initialTab }) {
         />
       )}
 
-      {/* ── Toast ── */}
+      {/* Toast */}
       {toast && (
-        <div className={[
-          "fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-xs font-semibold border transition-all",
-          toast.type === "error"
-            ? "bg-red-50 border-red-200 text-red-700"
-            : "bg-emerald-50 border-emerald-200 text-emerald-700",
-        ].join(" ")}>
+        <div
+          className={[
+            "fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-[var(--radius-control)] shadow-[var(--shadow-overlay)] text-xs font-semibold border transition-all",
+            toast.type === "error"
+              ? "bg-[var(--color-danger-soft)] border-[var(--color-danger)]/30 text-[var(--color-danger)]"
+              : "bg-[var(--color-valid-soft)] border-[var(--color-valid)]/30 text-[var(--color-valid)]",
+          ].join(" ")}
+        >
           {toast.type === "error"
-            ? <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0" />
-            : <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />}
+            ? <ExclamationTriangleIcon className="h-4 w-4 shrink-0" />
+            : <CheckCircleIcon className="h-4 w-4 shrink-0" />}
           {toast.msg}
         </div>
       )}
-
     </div>
   );
 }

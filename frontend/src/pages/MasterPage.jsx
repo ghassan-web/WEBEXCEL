@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { getMasterData, getColumnMappings, exportMasterCsv } from "../services/api";
-import { Button, Badge } from "../components/ui";
+import { PageHeader, Button, Badge } from "../components/ui";
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
@@ -135,43 +135,35 @@ export default function MasterPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans">
+    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans saas-page-enter">
       {/* Top Heading & Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-brand)]">
-            Consolidated Output
-          </span>
-          <h1 className="text-[var(--text-title)] font-bold text-[var(--color-ink)] tracking-tight mt-0.5">
-            Master {activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}
-          </h1>
-          <p className="text-xs text-[var(--color-ink-muted)] mt-0.5 max-w-2xl">
-            Pilih cedant untuk melihat data intinya atau seluruh kolom asli hasil scan file Excel.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={ArrowPathIcon}
-            loading={loading}
-            onClick={load}
-          >
-            Refresh
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            icon={ArrowDownTrayIcon}
-            loading={exporting}
-            disabled={totalRows === 0}
-            onClick={handleExport}
-          >
-            Export Excel
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={`Master ${activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}`}
+        description="Pilih cedant untuk melihat data intinya atau seluruh kolom asli hasil scan file Excel."
+        actions={
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ArrowPathIcon}
+              loading={loading}
+              onClick={load}
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={ArrowDownTrayIcon}
+              loading={exporting}
+              disabled={totalRows === 0}
+              onClick={handleExport}
+            >
+              Export Excel
+            </Button>
+          </div>
+        }
+      />
 
       {/* Dataset Tabs & Column View Mode Switcher */}
       <div className="flex flex-wrap items-center justify-between gap-3">

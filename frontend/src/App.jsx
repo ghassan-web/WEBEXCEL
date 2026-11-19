@@ -5,8 +5,10 @@ import ComparePage      from "./pages/ComparePage";
 import MappingRulesPage from "./pages/MappingRulesPage";
 import MasterPage       from "./pages/MasterPage";
 import OSCLNPage        from "./pages/OSCLNPage";
-import HistoryPage      from "./pages/HistoryPage";
-import LibraryPage      from "./pages/LibraryPage";
+import HistoryPage        from "./pages/HistoryPage";
+import LibraryPage        from "./pages/LibraryPage";
+import UserManagementPage from "./pages/UserManagementPage";
+import UserGuidePage      from "./pages/UserGuidePage";
 
 export default function App() {
   const [page,   setPage]   = useState("overview");
@@ -33,6 +35,8 @@ export default function App() {
       case "oscln":    return <OSCLNPage />;
       case "history":  return <HistoryPage />;
       case "library":  return <LibraryPage initialTab={libTab} />;
+      case "users":    return <UserManagementPage />;
+      case "guide":    return <UserGuidePage    onNavigate={navigateTo} />;
       default:         return <OverviewPage onNavigate={navigateTo} />;
     }
   }

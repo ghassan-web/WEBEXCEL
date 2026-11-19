@@ -579,7 +579,7 @@ export default function ComparePage({ onNavigate }) {
       : WIZARD_STEPS.findIndex((s) => s.id === currentStep);
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-4 sm:px-6 py-6 space-y-6 font-sans">
+    <div className="mx-auto w-full max-w-[1440px] px-4 sm:px-6 py-6 space-y-6 font-sans saas-page-enter">
       {/* ── Connected 3-Step Wizard Bar ── */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-surface)] px-5 py-3.5 shadow-[var(--shadow-card)] flex flex-wrap items-center justify-between gap-4">
         {WIZARD_STEPS.map((step, idx) => {
@@ -592,7 +592,7 @@ export default function ComparePage({ onNavigate }) {
                   isCompleted
                     ? "bg-[var(--color-valid)] text-white"
                     : isCurrent
-                      ? "bg-[var(--color-brand)] text-white shadow-xs"
+                      ? "bg-[var(--color-brand)] text-white shadow-sm"
                       : "bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] border border-[var(--color-line)]"
                 }`}
               >
@@ -627,7 +627,7 @@ export default function ComparePage({ onNavigate }) {
       {errorMessage && (
         <div
           role="alert"
-          className="p-4 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 rounded-[var(--radius-surface)] flex items-center justify-between gap-3 text-[var(--color-danger)] text-[var(--text-body-sm)]"
+          className="p-4 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 rounded-[var(--radius-surface)] flex items-center justify-between gap-3 text-[var(--color-danger)] text-[13px]"
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <ExclamationCircleIcon className="w-5 h-5 shrink-0 text-[var(--color-danger)]" />
@@ -647,11 +647,11 @@ export default function ComparePage({ onNavigate }) {
           STEP 1: UPLOAD & SCAN WORKBOOK HEADERS
       ════════════════════════════════════════════════════════════════════ */}
       {currentStep === "UPLOAD" && (
-        <div className="bg-[var(--color-surface)] p-5 sm:p-6 rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)] w-full space-y-6 text-[var(--text-body)]">
+        <div className="bg-[var(--color-surface)] p-5 sm:p-6 rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)] w-full space-y-6 text-sm">
           {/* Header: Title & Dataset Type Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[var(--color-line)] gap-3">
             <div>
-              <h2 className="text-[var(--text-title)] font-bold text-[var(--color-ink)] tracking-tight">
+              <h2 className="text-xl font-bold text-[var(--color-ink)] tracking-tight">
                 Upload OS Claims &amp; InfoPack Files
               </h2>
               <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">

@@ -43,9 +43,9 @@ export default function IconButton({
       {...rest}
     >
       {loading ? (
-        <ArrowPathIcon className={`${size === "sm" ? "w-4 h-4" : "w-4.5 h-4.5"} animate-spin shrink-0`} />
+        <ArrowPathIcon className={`${size === "sm" ? "w-4 h-4" : "w-[18px] h-[18px]"} animate-spin shrink-0`} />
       ) : Icon ? (
-        <Icon className={`${size === "sm" ? "w-4 h-4" : "w-4.5 h-4.5"} shrink-0`} />
+        <Icon className={`${size === "sm" ? "w-4 h-4" : "w-[18px] h-[18px]"} shrink-0`} />
       ) : null}
     </button>
   );

@@ -14,7 +14,7 @@ export default function PageHeader({
     >
       <div className="flex flex-col gap-1 min-w-0">
         {eyebrow && (
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-brand)]">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-ink-muted)]">
             {eyebrow}
           </span>
         )}
@@ -25,7 +25,7 @@ export default function PageHeader({
           {status}
         </div>
         {description && (
-          <p className="text-[var(--text-body-sm)] text-[var(--color-ink-muted)] max-w-2xl leading-relaxed">
+          <p className="text-sm text-[var(--color-ink)] max-w-2xl leading-relaxed">
             {description}
           </p>
         )}

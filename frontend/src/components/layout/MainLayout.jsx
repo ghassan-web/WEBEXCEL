@@ -7,6 +7,7 @@ import {
   QuestionMarkCircleIcon,
   ClockIcon,
   AdjustmentsHorizontalIcon,
+  UsersIcon,
 } from "@heroicons/react/24/outline";
 
 /* PanelLeft & PanelLeftClose icons matching lucide-react in indonesiare-frontend */
@@ -89,7 +90,7 @@ export default function MainLayout({
       {/* Skip to Main Content Bypass Link (WCAG 2.4.1) */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:bg-[var(--color-brand)] focus:text-white focus:rounded-[var(--radius-control)] focus:shadow-lg focus:outline-hidden"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:bg-[var(--color-brand)] focus:text-white focus:rounded-[var(--radius-control)] focus:shadow-lg focus:outline-none"
       >
         Skip to main content
       </a>
@@ -109,7 +110,7 @@ export default function MainLayout({
       {mobileNavOpen && (
         <div className="fixed inset-0 z-50 md:hidden flex">
           <div
-            className="fixed inset-0 bg-[var(--color-ink)]/40 backdrop-blur-xs transition-opacity"
+            className="fixed inset-0 bg-[var(--color-ink)]/40 backdrop-blur-[2px] transition-opacity"
             onClick={() => setMobileNavOpen(false)}
             aria-hidden="true"
           />
@@ -254,7 +255,16 @@ export default function MainLayout({
 
                   <button
                     type="button"
-                    onClick={() => handleNavigate("overview")}
+                    onClick={() => handleNavigate("users")}
+                    className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-[var(--color-ink-body)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-sunken)] transition-colors text-left cursor-pointer"
+                  >
+                    <UsersIcon className="w-4 h-4 text-[var(--color-ink-muted)]" />
+                    <span>User Management</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate("guide")}
                     className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-[var(--color-ink-body)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-sunken)] transition-colors text-left cursor-pointer"
                   >
                     <QuestionMarkCircleIcon className="w-4 h-4 text-[var(--color-ink-muted)]" />
@@ -270,7 +280,7 @@ export default function MainLayout({
         <main
           id="main-content"
           tabIndex={-1}
-          className="flex-1 min-h-0 min-w-0 flex flex-col focus:outline-hidden overflow-y-auto app-main-scroll"
+          className="flex-1 min-h-0 min-w-0 flex flex-col focus:outline-none overflow-y-auto app-main-scroll"
         >
           {children}
         </main>

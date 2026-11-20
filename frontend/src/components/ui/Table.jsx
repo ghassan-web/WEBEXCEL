@@ -26,7 +26,7 @@ export function TableHeader({ children, className = "", ...rest }) {
   return (
     <thead
       className={`border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)] ${
-        stickyHeader ? "sticky top-0 z-10 backdrop-blur-xs" : ""
+        stickyHeader ? "sticky top-0 z-10 backdrop-blur-[2px]" : ""
       } ${className}`}
       {...rest}
     >

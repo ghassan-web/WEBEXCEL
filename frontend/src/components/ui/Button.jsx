@@ -32,9 +32,9 @@ export default function Button({
 
   const sizes = {
     xs: "h-7 px-2.5 text-[11px] gap-1",
-    sm: "h-8.5 px-3 text-xs gap-1.5",
+    sm: "h-9 px-3 text-xs gap-1.5",
     md: "h-10 px-4 text-sm gap-2",
-    lg: "h-11 px-5 text-[var(--text-body)] gap-2",
+    lg: "h-11 px-5 text-sm gap-2",
   };
 
   const stateStyles = loading
@@ -50,7 +50,7 @@ export default function Button({
       : size === "sm"
         ? "w-3.5 h-3.5"
         : size === "lg"
-          ? "w-4.5 h-4.5"
+          ? "w-[18px] h-[18px]"
           : "w-4 h-4";
 
   return (

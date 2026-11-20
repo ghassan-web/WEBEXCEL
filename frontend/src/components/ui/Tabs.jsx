@@ -60,9 +60,9 @@ export function Tabs({
               type="button"
               aria-selected={isSelected}
               onClick={() => handleValueChange(itemValue)}
-              className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[var(--text-body-sm)] font-semibold transition-all duration-150 ease-[var(--ease-saas)] whitespace-nowrap cursor-pointer ${
+              className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[13px] font-semibold transition-all duration-150 ease-[var(--ease-saas)] whitespace-nowrap cursor-pointer ${
                 isSelected
-                  ? "bg-[var(--color-brand)] text-white shadow-xs font-semibold"
+                  ? "bg-[var(--color-brand)] text-white shadow-sm font-semibold"
                   : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
               }`}
             >
@@ -104,7 +104,7 @@ export function Tabs({
             type="button"
             aria-selected={isSelected}
             onClick={() => handleValueChange(itemValue)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-[var(--text-body-sm)] font-semibold border-b-2 transition-all duration-150 whitespace-nowrap cursor-pointer -mb-px focus-visible:outline-2 focus-visible:outline-[var(--color-brand)] focus-visible:outline-offset-2 ${
+            className={`flex items-center gap-2 px-4 py-2.5 text-[13px] font-semibold border-b-2 transition-all duration-150 whitespace-nowrap cursor-pointer -mb-px focus-visible:outline-2 focus-visible:outline-[var(--color-brand)] focus-visible:outline-offset-2 ${
               isSelected
                 ? "border-[var(--color-brand)] text-[var(--color-ink)]"
                 : "border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:border-[var(--color-line-strong)]"
@@ -158,9 +158,9 @@ export function TabsTrigger({ value, className = "", children, disabled = false,
       aria-selected={isSelected}
       disabled={disabled}
       onClick={() => context?.onValueChange(value)}
-      className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-[var(--text-caption)] sm:text-[var(--text-body-sm)] font-semibold rounded-full transition-all duration-150 ease-[var(--ease-saas)] cursor-pointer whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] disabled:pointer-events-none disabled:opacity-50 ${
+      className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs sm:text-[13px] font-semibold rounded-full transition-all duration-150 ease-[var(--ease-saas)] cursor-pointer whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] disabled:pointer-events-none disabled:opacity-50 ${
         isSelected
-          ? "bg-[var(--color-surface)] text-[var(--color-ink)] border border-[var(--color-line)] shadow-xs font-bold"
+          ? "bg-[var(--color-surface)] text-[var(--color-ink)] border border-[var(--color-line)] shadow-sm font-bold"
           : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface)]/70"
       } ${className}`}
       {...rest}

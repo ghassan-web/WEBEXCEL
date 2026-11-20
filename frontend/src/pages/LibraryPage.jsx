@@ -1,14 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-<<<<<<< HEAD
 import {
   getHeaderLibrary,
   getLibrary,
   deleteLibraryEntry,
+  deleteLibraryEntries,
   getMasterData,
 } from "../services/api";
-=======
-import { getLibrary, deleteLibraryEntry, deleteLibraryEntries, getMasterData } from "../services/api";
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 import {
   BookOpenIcon,
   ArrowPathIcon,
@@ -87,7 +84,6 @@ function ConfirmModal({ file, onConfirm, onCancel, loading }) {
   );
 }
 
-<<<<<<< HEAD
 function HeaderLibraryView({ activeTab }) {
   const [data, setData] = useState({ total: 0, headers: [] });
   const [page, setPage] = useState(0);
@@ -286,7 +282,11 @@ function HeaderLibraryView({ activeTab }) {
             </div>
           </div>
         )}
-=======
+      </div>
+    </div>
+  );
+}
+
 /* ── bulk confirm modal ── */
 function BulkConfirmModal({ count, files, onConfirm, onCancel, loading }) {
   return (
@@ -328,7 +328,6 @@ function BulkConfirmModal({ count, files, onConfirm, onCancel, loading }) {
             {loading ? "Menghapus…" : `Ya, Hapus ${count} File`}
           </button>
         </div>
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
       </div>
     </div>
   );
@@ -373,16 +372,16 @@ export default function LibraryPage({ initialTab }) {
     }
   }, [activeTab, page]);
 
-<<<<<<< HEAD
   useEffect(() => {
     if (libraryView === "files") load();
   }, [libraryView, load]);
-  useEffect(() => { setPage(0); setSearch(""); setSearchInput(""); }, [activeTab]);
-=======
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(0); setSearch(""); setSearchInput(""); setSelected(new Set()); }, [activeTab]);
+  useEffect(() => {
+    setPage(0);
+    setSearch("");
+    setSearchInput("");
+    setSelected(new Set());
+  }, [activeTab]);
   useEffect(() => { setSelected(new Set()); }, [page]);
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });

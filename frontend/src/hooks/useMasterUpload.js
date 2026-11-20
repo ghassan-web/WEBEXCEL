@@ -35,7 +35,6 @@ export function useMasterUpload() {
   const handleFileChange = useCallback(async (f, preferredSheets = null) => {
     setFile(f);
     setSheets([]);
-<<<<<<< HEAD
     setError(null);
     setForm(prev => ({ ...prev, sheet_name: "" }));
 
@@ -60,20 +59,6 @@ export function useMasterUpload() {
       }
     } catch (e) {
       setError(e.message || "Gagal membaca daftar sheet dari file.");
-=======
-    updateForm("sheet_name", "");
-    if (f && !f.name.endsWith(".xlsb")) {
-      // .xlsb sheet detection via backend
-      try {
-        const data = await getSheetNames(f);
-        setSheets(data.sheets || []);
-      } catch (_) {}
-    } else if (f && f.name.endsWith(".xlsb")) {
-      try {
-        const data = await getSheetNames(f);
-        setSheets(data.sheets || []);
-      } catch (_) {}
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
     }
   }, []);
 

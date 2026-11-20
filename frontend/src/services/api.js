@@ -262,24 +262,19 @@ export async function deleteLibraryEntry(jobId) {
 }
 
 /**
-<<<<<<< HEAD
- * GET /api/master/export  (browser nav → query param)
- * Downloads as .xlsx
-=======
  * DELETE /api/master/library  (bulk) — body: { job_ids: [1,2,3] }
  */
 export async function deleteLibraryEntries(jobIds) {
   const res = await fetch(`${BASE_URL}/api/master/library`, {
     method: "DELETE",
-    headers: { "Content-Type": "application/json" },
+    headers: sessionHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ job_ids: jobIds }),
   });
   return handleResponse(res);
 }
 
 /**
- * GET /api/master/export?tipe_data=&cedant=  → triggers CSV download
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
+ * GET /api/master/export?tipe_data=&cedant= → triggers CSV download
  */
 export function exportMasterCsv(tipeData, cedant) {
   const params = new URLSearchParams({ session_id: getSessionId() });

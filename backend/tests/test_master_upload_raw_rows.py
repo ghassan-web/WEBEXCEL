@@ -7,8 +7,27 @@ from app.routers.master import (
     _cedant_result_table_name,
     _has_cedant_result_values,
     _load_column_mapping,
+    _master_raw_row_lookup_key,
     _raw_primary_key,
 )
+
+
+class MasterRawRowLookupKeyTests(unittest.TestCase):
+    def test_scopes_same_claim_to_its_upload_file_and_period(self):
+        raw_rows = {
+            _master_raw_row_lookup_key("LC011", "CLM-1", "Claims", "january.xlsx", 1, 2025): {
+                "source": "January upload"
+            },
+            _master_raw_row_lookup_key("LC011", "CLM-1", "Claims", "february.xlsx", 2, 2025): {
+                "source": "February upload"
+            },
+        }
+
+        key = _master_raw_row_lookup_key(
+            "LC011", "CLM-1", "Claims", "february.xlsx", 2, 2025
+        )
+
+        self.assertEqual(raw_rows[key]["source"], "February upload")
 
 
 class RawPrimaryKeyTests(unittest.TestCase):

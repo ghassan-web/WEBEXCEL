@@ -37,16 +37,8 @@ async def upload_and_compare(
     session_id:      str           = Depends(get_session_id),
 ):
     for f, label in [(file_a, "File A"), (file_b, "File B")]:
-<<<<<<< HEAD
         if not f.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
             raise HTTPException(status_code=400, detail=f"{label} harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
-=======
-        if not f.filename.endswith((".xlsx", ".xls", ".xlsb")):
-            raise HTTPException(
-                status_code=400,
-                detail=f"{label} harus berformat .xlsx atau .xls"
-            )
->>>>>>> 772547da4971a77d44c538bf43765efad620e01f
 
     bytes_a = await file_a.read()
     bytes_b = await file_b.read()

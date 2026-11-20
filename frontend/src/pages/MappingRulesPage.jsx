@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useColumnMappings } from "../hooks/useColumnMappings";
 import { addColumnMappingVersion } from "../services/api";
 import {
+  AdjustmentsHorizontalIcon,
   MagnifyingGlassIcon,
   ArrowPathIcon,
   InformationCircleIcon,

@@ -65,6 +65,7 @@ Endpoint utama berada di `/api/oscln`: `snapshots`, `upload`, `reconcile`, dan `
 ## Arsitektur data dan dependensi
 
 - Backend: FastAPI dengan SQLAlchemy; entry point berada di `backend/app/main.py`.
+- Endpoint `GET /health` menjalankan `SELECT 1` ke PostgreSQL yang dikonfigurasi dan hanya melaporkan `healthy` jika query berhasil; jika gagal, endpoint mengembalikan HTTP 503 tanpa membocorkan detail koneksi.
 - Logika workbook/CSV, komparasi, dan pembuatan laporan berada di `backend/app/services/excel_service.py`.
 - Database dikonfigurasi untuk PostgreSQL melalui `DATABASE_URL` atau variabel `DB_*`; `DB_SCHEMA` hanya mengatur search path untuk query yang tidak berkualifikasi schema. Query upload dan tabel Master yang dibahas di atas menyebut schema `rekonsiliasi` secara eksplisit.
 - Model aplikasi meliputi `upload_jobs`, `comparison_jobs`, `comparison_results`, `oscln_snapshots`, dan `oscln_rows`, selain model tabel Master.

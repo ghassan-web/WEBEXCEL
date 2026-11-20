@@ -1360,14 +1360,20 @@ export default function ComparePage({ onNavigate }) {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-semibold">
               <span className="text-[var(--color-ink)]">
-                {uploadPct < 100 ? "Mengunggah workbook..." : "Menyimpan ke database..."}
+                {uploadPct < 100
+                  ? "Mengunggah workbook..."
+                  : "File terkirim; server sedang memproses dan menyimpan..."}
               </span>
-              <span className="text-[var(--color-brand)] font-mono">{uploadPct}%</span>
+              <span className="text-[var(--color-brand)] font-mono">
+                {uploadPct < 100 ? `${uploadPct}%` : "Memproses"}
+              </span>
             </div>
             <div className="w-full h-2 bg-[var(--color-surface-sunken)] rounded-full overflow-hidden">
               <div
-                className="h-full bg-[var(--color-brand)] rounded-full transition-all duration-300"
-                style={{ width: `${Math.max(10, uploadPct)}%` }}
+                className={`h-full bg-[var(--color-brand)] rounded-full transition-all duration-300 ${
+                  uploadPct >= 100 ? "animate-pulse" : ""
+                }`}
+                style={{ width: uploadPct < 100 ? `${Math.max(10, uploadPct)}%` : "35%" }}
               />
             </div>
           </div>

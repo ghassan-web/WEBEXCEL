@@ -116,13 +116,30 @@ DOL_PATTERNS = (
     r"^DATE OF LOSS$", r"^Date of Loss$", r"^date_of_loss$",
     r"^loss_date$", r"^Tgl\. DOL$", r"^DOCL$", r"^Loss Date$",
     r"^D\.O\.L$", r"^LossClaim$", r"^tg_kejadian$",
-    r"date.*loss|loss.*date|\bdol\b",
+    r"date.*(loss|incident|accident|occurrence)|"
+    r"(loss|incident|accident|occurrence).*date|"
+    r"tanggal.*(loss|kejadian|kerugian)|"
+    r"(loss|kejadian|kerugian).*tanggal|\bdol\b",
 )
 CURRENCY_PATTERNS = (
     r"^Currency$", r"^Curr$", r"^curr$", r"^Mata Uang$",
     r"^currency$", r"^CCY$", r"^ccy$",
 )
-DOC_NO_PATTERNS = (r"doc.*no", r"ref.*no", r"claim.*no", r"^no$", r"nomor",)
+DOC_NO_PATTERNS = (
+    r"doc.*(no|number|ref)",
+    r"ref(erence)?.*(no|number)|^(loss|claim)\s*ref(erence)?$",
+    r"claim.*(no|number|ref|reference|id)",
+    r"(policy|certificate).*(no|number|ref)",
+    r"^no$",
+    r"nomor",
+)
+DOC_NO_DATE_HEADER_PATTERNS = (
+    r"\bdate\b",
+    r"\bdol\b",
+    r"\btgl\b",
+    r"\btanggal\b",
+    r"kejadian|incident|accident|occurrence",
+)
 CLASS_CODE_PATTERNS = (
     r"^Class Code$", r"^class_code$", r"^classcode$", r"class.*code",
 )
@@ -153,6 +170,30 @@ def _find(data: dict, *patterns) -> str:
                 val = str(v).strip() if v is not None else ""
                 if val and val.lower() not in ("", "nan", "none", "-"):
                     return val
+    return ""
+
+
+def _find_doc_no(data: dict) -> str:
+    for pattern in DOC_NO_PATTERNS:
+        for header, value in data.items():
+            header_name = str(header).strip()
+            if not re.search(pattern, header_name, re.IGNORECASE):
+                continue
+            if any(
+                re.search(date_pattern, header_name, re.IGNORECASE)
+                for date_pattern in DOC_NO_DATE_HEADER_PATTERNS
+            ):
+                continue
+            candidate = str(value).strip() if value is not None else ""
+            if not candidate or candidate.lower() in ("nan", "none", "-"):
+                continue
+            if re.fullmatch(
+                r"(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})"
+                r"(?:[ T].*)?",
+                candidate,
+            ) and _parse_dol(candidate):
+                continue
+            return candidate[:255]
     return ""
 
 
@@ -534,6 +575,107 @@ def _build_os_mapping_profiles(rows: list[dict]) -> list[dict]:
     return result
 
 
+def _build_mapping_version_profiles(rows: list[dict]) -> list[dict]:
+    profiles = {}
+    for row in rows:
+        dataset_type = str(row.get("dataset_type") or "").strip().upper()
+        if dataset_type not in {"OS CEDANT", "INFOPACK"}:
+            continue
+        field_name = _canonical_field_name(row.get("field_name") or "")
+        header_name = str(row.get("excel_name") or "").strip()
+        if not field_name or not header_name:
+            continue
+
+        argument = row.get("argument") or {}
+        if isinstance(argument, str):
+            try:
+                argument = json.loads(argument)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Aturan mapping tersimpan memiliki argument JSON tidak valid.",
+                ) from exc
+        if not isinstance(argument, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Argument mapping tersimpan tidak valid.",
+            )
+        sheet_names = argument.get("sheet_names") or []
+        if isinstance(sheet_names, str):
+            sheet_names = [sheet_names]
+        scopes = [
+            str(name).strip()
+            for name in sheet_names
+            if str(name).strip()
+        ] or [""]
+
+        cedant_code = str(row.get("cedant_code") or "")
+        version = int(row.get("mapping_version") or 0)
+        for sheet_name in scopes:
+            key = (
+                cedant_code,
+                dataset_type,
+                _normalize_mapping_value(sheet_name),
+                version,
+            )
+            profile = profiles.setdefault(
+                key,
+                {
+                    "tipe_data": "Infopack" if dataset_type == "INFOPACK" else "OS Cedant",
+                    "cedant": row.get("cedant_name") or cedant_code or "—",
+                    "cedantCode": cedant_code,
+                    "sheetNames": [sheet_name] if sheet_name else [],
+                    "sheetMet": sheet_name or "All sheets",
+                    "mappingVersion": version,
+                    "mapping": {},
+                },
+            )
+            profile["mapping"].setdefault(field_name, header_name)
+
+    return sorted(
+        profiles.values(),
+        key=lambda profile: (
+            profile["tipe_data"],
+            profile["cedant"].casefold(),
+            profile["sheetMet"].casefold(),
+            profile["mappingVersion"],
+        ),
+    )
+
+
+def _normalize_manual_mapping(mapping: dict, catalog: list[dict]) -> dict[str, str]:
+    if not isinstance(mapping, dict) or not mapping:
+        raise HTTPException(status_code=422, detail="Mapping harus berisi field dan header.")
+
+    column_fields = {
+        _mapping_key(str(field["field_name"])): field
+        for field in catalog
+        if field.get("default_source") == "column"
+    }
+    normalized = {}
+    for raw_field, raw_header in mapping.items():
+        field_key = _mapping_key(str(raw_field))
+        field = column_fields.get(field_key)
+        if not field:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Field mapping '{raw_field}' bukan field kolom yang tersedia.",
+            )
+        if not isinstance(raw_header, str) or not raw_header.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Header untuk field '{raw_field}' wajib diisi.",
+            )
+        canonical_field = _canonical_field_name(str(field["field_name"]))
+        if canonical_field in normalized:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Field mapping '{canonical_field}' dikirim lebih dari sekali.",
+            )
+        normalized[canonical_field] = raw_header.strip()
+    return normalized
+
+
 @router.get("/mappings", summary="Ambil mapping kolom aktif dari database")
 def get_column_mappings(db: Session = Depends(get_db)):
     from ..models.database import DB_MODE, DB_LAST_ERROR
@@ -549,6 +691,25 @@ def get_column_mappings(db: Session = Depends(get_db)):
                 "LEFT JOIN rekonsiliasi.master_oscedant_code c ON c.cedant_code = m.cedant_code "
                 "WHERE m.is_active = TRUE "
                 "ORDER BY cedant_name, m.cedant_code, f.field_name"
+            )
+        ).mappings().all()
+        mapping_history_rows = db.execute(
+            text(
+                "SELECT m.cedant_code, "
+                "COALESCE(NULLIF(BTRIM(c.cedant_name), ''), m.cedant_code) AS cedant_name, "
+                "m.header_name AS excel_name, f.field_name, f.dataset_type, "
+                "m.mapping_version, m.argument "
+                "FROM rekonsiliasi.master_mapping_column m "
+                "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
+                "LEFT JOIN rekonsiliasi.master_oscedant_code c ON c.cedant_code = m.cedant_code "
+                "ORDER BY cedant_name, m.cedant_code, f.dataset_type, "
+                "m.mapping_version, f.field_name"
+            )
+        ).mappings().all()
+        mapping_fields = db.execute(
+            text(
+                "SELECT field_name, dataset_type, default_source "
+                "FROM rekonsiliasi.master_field ORDER BY field_id"
             )
         ).mappings().all()
         history_rows = db.execute(
@@ -583,6 +744,8 @@ def get_column_mappings(db: Session = Depends(get_db)):
         return {
             "profiles": [],
             "cedants": [],
+            "mapping_versions": [],
+            "mapping_fields": [],
             "db_connected": False,
             "db_mode": DB_MODE,
             "db_error": DB_LAST_ERROR or str(exc),
@@ -641,6 +804,23 @@ def get_column_mappings(db: Session = Depends(get_db)):
                     "argument": {"sheet_names": [sheet_name]} if sheet_name else {},
                 }
             )
+
+    normalized_mapping_fields = {}
+    for row in mapping_fields:
+        if row.get("default_source") != "column":
+            continue
+        dataset_type = str(row.get("dataset_type") or "").strip().upper()
+        field_name = _canonical_field_name(str(row.get("field_name") or ""))
+        if dataset_type not in {"OS CEDANT", "INFOPACK"} or not field_name:
+            continue
+        key = (dataset_type, field_name)
+        normalized_mapping_fields.setdefault(
+            key,
+            {
+                "field_name": field_name,
+                "dataset_type": "Infopack" if dataset_type == "INFOPACK" else "OS Cedant",
+            },
+        )
 
     profiles = {}
     for profile in _build_os_mapping_profiles(rows):
@@ -722,6 +902,10 @@ def get_column_mappings(db: Session = Depends(get_db)):
 
     return {
         "profiles": result,
+        "mapping_versions": _build_mapping_version_profiles(
+            [*mapping_history_rows, *rows]
+        ),
+        "mapping_fields": list(normalized_mapping_fields.values()),
         "cedants": [
             {
                 "cedant_code": row["cedant_code"],
@@ -731,6 +915,137 @@ def get_column_mappings(db: Session = Depends(get_db)):
         ],
         "db_connected": True,
     }
+
+
+@router.post("/mappings", summary="Tambahkan versi mapping untuk cedant")
+def add_mapping_version(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    session_id: str = Depends(get_session_id),
+):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Payload mapping harus berupa object.")
+    raw_dataset_type = str(
+        payload.get("dataset_type") or payload.get("tipe_data") or ""
+    ).strip()
+    normalized_dataset_type = _normalize_field_name(raw_dataset_type)
+    if normalized_dataset_type in {"infopack", "info_pack", "info_pack_claim"}:
+        dataset_type = "INFOPACK"
+    elif normalized_dataset_type in {"os_cedant", "os_claim_cedant", "os_claim"}:
+        dataset_type = "OS CEDANT"
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset harus OS Cedant atau Infopack.",
+        )
+
+    cedant_code = str(payload.get("cedant_code") or "").strip()
+    if not cedant_code:
+        raise HTTPException(status_code=422, detail="Kode cedant wajib dipilih.")
+    sheet_names = payload.get("sheet_names") or []
+    if isinstance(sheet_names, str):
+        sheet_names = [sheet_names]
+    if not isinstance(sheet_names, list):
+        raise HTTPException(status_code=422, detail="sheet_names harus berupa daftar.")
+    sheet_names = list(dict.fromkeys(
+        str(sheet).strip()
+        for sheet in sheet_names
+        if str(sheet).strip()
+    ))
+    mapping = payload.get("mapping")
+
+    try:
+        cedant_record = db.execute(
+            text(
+                "SELECT cedant_code FROM rekonsiliasi.master_oscedant_code "
+                "WHERE cedant_code = :cedant_code"
+            ),
+            {"cedant_code": cedant_code},
+        ).first()
+        if not cedant_record:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Kode cedant '{cedant_code}' tidak terdaftar.",
+            )
+
+        catalog = _load_field_catalog(db, dataset_type)
+        normalized_mapping = _normalize_manual_mapping(mapping, catalog)
+        field_by_key = {
+            _mapping_key(str(field["field_name"])): field
+            for field in catalog
+            if field.get("default_source") == "column"
+        }
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {
+                "lock_key": (
+                    f"claim-on-duty:mapping:{cedant_code}:{dataset_type}"
+                )
+            },
+        )
+        max_version = db.execute(
+            text(
+                "SELECT MAX(m.mapping_version) "
+                "FROM rekonsiliasi.master_mapping_column m "
+                "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
+                "WHERE m.cedant_code = :cedant_code "
+                "AND UPPER(BTRIM(f.dataset_type)) = :dataset_type"
+            ),
+            {"cedant_code": cedant_code, "dataset_type": dataset_type},
+        ).scalar()
+        max_upload_version = db.execute(
+            text(
+                "SELECT MAX(t.mapping_version) "
+                "FROM rekonsiliasi.upload_table t "
+                "JOIN rekonsiliasi.upload_batch b ON b.batch_id = t.batch_id "
+                "WHERE b.cedant_code = :cedant_code "
+                "AND UPPER(BTRIM(b.dataset_type)) = :dataset_type"
+            ),
+            {"cedant_code": cedant_code, "dataset_type": dataset_type},
+        ).scalar()
+        version = max(int(max_version or 0), int(max_upload_version or 0)) + 1
+        argument = {"sheet_names": sheet_names} if sheet_names else {}
+        inserts = [
+            {
+                "cedant_code": cedant_code,
+                "field_id": int(field_by_key[_mapping_key(field_name)]["field_id"]),
+                "mapping_version": version,
+                "source_type": "column",
+                "column_index": None,
+                "header_name": header_name,
+                "argument": json.dumps(argument, ensure_ascii=False),
+                "created_by": session_id,
+            }
+            for field_name, header_name in normalized_mapping.items()
+        ]
+        db.execute(
+            text(
+                "INSERT INTO rekonsiliasi.master_mapping_column "
+                "(cedant_code, field_id, mapping_version, source_type, column_index, "
+                "header_name, argument, is_active, created_by) "
+                "VALUES (:cedant_code, :field_id, :mapping_version, :source_type, "
+                ":column_index, :header_name, CAST(:argument AS jsonb), TRUE, :created_by)"
+            ),
+            inserts,
+        )
+        db.commit()
+        return {
+            "cedant_code": cedant_code,
+            "dataset_type": dataset_type,
+            "sheet_names": sheet_names,
+            "mapping_version": version,
+            "mapping": normalized_mapping,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        logger.exception("Failed creating mapping version")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal menambahkan mapping: {exc}",
+        ) from exc
 
 
 def _extract_cedant_row_with_mapping(
@@ -771,11 +1086,11 @@ def _extract_cedant_row_with_mapping(
         return _find(data, *fallback_patterns)
 
     # doc_no
-    doc_no_raw = mapped_value("doc_no") or None
+    doc_no_raw = mapped_value("doc_no") or _find_doc_no(data) or None
     if not doc_no_raw:
         # Fallback ke pk
         pk_raw = str(r.get("pk") or "").strip()
-        if pk_raw and not _parse_dol(pk_raw):
+        if pk_raw.lower() not in ("", "nan", "none", "-") and not _parse_dol(pk_raw):
             doc_no_raw = pk_raw
 
     # dol
@@ -954,6 +1269,8 @@ def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
 
     # doc_no: gunakan pk langsung (itu adalah loss ref / claim no dari kolom mapping)
     pk_raw = str(r.get("pk") or "").strip()
+    if pk_raw.lower() in ("nan", "none", "-"):
+        pk_raw = ""
 
     # Cek apakah pk berbentuk pure tanggal (mis "2026-07-23 00:00:00" atau "23/07/2026")
     # Jika iya, coba cari doc_no dari kolom lain di data
@@ -965,19 +1282,9 @@ def _extract_cedant_row(r, cedant_code, bulan, tahun, file_name, sheet_name):
 
     if _is_date_pk:
         # Cari dari kolom yang namanya mengandung "ref", "no", "claim" tapi BUKAN date/dol
-        doc_no = None
-        for k, v in data.items():
-            k_lower = k.lower()
-            if any(x in k_lower for x in ("ref", "claim", "doc", "invoice", "faktur", "no_berkas")):
-                if not any(x in k_lower for x in ("date", "dol", "loss", "tanggal", "tgl", "kejadian")):
-                    val = str(v).strip() if v is not None else ""
-                    if val and val.lower() not in ("", "nan", "none", "-"):
-                        # Pastikan tidak berbentuk tanggal
-                        if not _parse_dol(val) or not re.match(r"^\d{4}-\d{2}-\d{2}|^\d{2}/\d{2}/\d{4}", val):
-                            doc_no = val[:255]
-                            break
+        doc_no = _find_doc_no(data) or None
     else:
-        doc_no = pk_raw[:255] if pk_raw else None
+        doc_no = pk_raw[:255] if pk_raw else _find_doc_no(data) or None
 
     # dol: cari dari DOL patterns di data
     raw_dol = _find(data, *DOL_PATTERNS)
@@ -2118,12 +2425,15 @@ def _build_workflow_cedant_row(
     mapping: dict[str, str],
     context: dict,
 ) -> dict:
-    raw_dol = _raw_value(data, mapping, "dol")
+    raw_dol = _raw_value(data, mapping, "dol") or _find(data, *DOL_PATTERNS)
     raw_outstanding = _raw_value(data, mapping, "outstanding")
     raw_currency = _raw_value(data, mapping, "currency")
     return {
         "cedant_code": context["cedant_code"],
-        "doc_no": _raw_value(data, mapping, "loss_ref", "doc_no")[:255] or None,
+        "doc_no": (
+            _raw_value(data, mapping, "loss_ref", "doc_no")
+            or _find_doc_no(data)
+        )[:255] or None,
         "dol": _parse_dol(raw_dol) if raw_dol else None,
         "outstanding": _parse_decimal(raw_outstanding),
         "currency": raw_currency[:10] or None,
@@ -2622,7 +2932,7 @@ def _auto_match_headers_for_sheet(
                     matched[field_name] = m
     else:
         if not matched.get("doc_no"):
-            m = _match_header_by_patterns(columns, (r"^DocNo$", r"^Doc No$", r"^Loss Ref$",) + DOC_NO_PATTERNS)
+            m = _match_header_by_patterns(columns, DOC_NO_PATTERNS)
             if m:
                 matched["doc_no"] = m
         if not matched.get("outstanding"):
@@ -2915,6 +3225,7 @@ async def prepare_master_upload(
                     total_rows=parsed["total_rows"],
                 )
             )
+            raw_row_mappings = []
             for source_row in parsed["rows"]:
                 row_data = dict(source_row["data"])
                 raw_primary_key = _raw_value(
@@ -2928,19 +3239,24 @@ async def prepare_master_upload(
                     "job_id": job.id,
                     "excel_row": source_row["excel_row"],
                 }
-                db.add(
-                    MasterRawRow(
-                        job_id=job.id,
-                        session_id=session_id,
-                        target_table=_target_table(display_type),
-                        cedant_code=resolved_cedant,
-                        primary_key_value=raw_primary_key[:500] or None,
-                        month=month,
-                        year=year,
-                        file_name=file_name,
-                        sheet_name=selected_sheet,
-                        full_row_data=json.dumps(row_data, ensure_ascii=False),
-                    )
+                raw_row_mappings.append(
+                    {
+                        "job_id": job.id,
+                        "session_id": session_id,
+                        "target_table": _target_table(display_type),
+                        "cedant_code": resolved_cedant,
+                        "primary_key_value": raw_primary_key[:500] or None,
+                        "month": month,
+                        "year": year,
+                        "file_name": file_name,
+                        "sheet_name": selected_sheet,
+                        "full_row_data": json.dumps(row_data, ensure_ascii=False),
+                    }
+                )
+            for start in range(0, len(raw_row_mappings), 1000):
+                db.bulk_insert_mappings(
+                    MasterRawRow,
+                    raw_row_mappings[start : start + 1000],
                 )
             total_rows += parsed["total_rows"]
             complete, missing = _workflow_mapping_status(proposed_mapping, dataset_type)
@@ -3711,6 +4027,20 @@ def get_master_data(
     tipe_data:  Optional[str] = Query(None),
     cedant:     Optional[str] = Query(None),
     search:     Optional[str] = Query(None),
+    loss_ref:   Optional[str] = Query(None),
+    cedant_code: Optional[str] = Query(None),
+    cedant_name: Optional[str] = Query(None),
+    dol:        Optional[str] = Query(None),
+    currency:   Optional[str] = Query(None),
+    outstanding: Optional[str] = Query(None),
+    class_code: Optional[str] = Query(None),
+    title:      Optional[str] = Query(None),
+    value:      Optional[str] = Query(None),
+    sheet_name: Optional[str] = Query(None),
+    period:     Optional[str] = Query(None),
+    cob:        Optional[str] = Query(None),
+    gross:      Optional[str] = Query(None),
+    tsi:        Optional[str] = Query(None),
     skip:       int           = Query(0,  ge=0),
     limit:      int           = Query(50, ge=1, le=500),
     db:         Session       = Depends(get_db),
@@ -3718,38 +4048,99 @@ def get_master_data(
 ):
     table = _target_table(tipe_data or "")
     is_infopack = table == INFOPACK_TABLE
+    table_name = _qualified_master_table(table)
 
     where, params = [], {}
     if cedant:
-        where.append("cedant_code = :cedant")
+        where.append("master_rows.cedant_code = :cedant")
         params["cedant"] = cedant
     if not is_infopack:
         where.append(
-            "(NULLIF(TRIM(doc_no), '') IS NOT NULL OR dol IS NOT NULL "
-            "OR outstanding IS NOT NULL OR NULLIF(TRIM(currency), '') IS NOT NULL)"
+            "(NULLIF(TRIM(master_rows.doc_no), '') IS NOT NULL OR master_rows.dol IS NOT NULL "
+            "OR master_rows.outstanding IS NOT NULL "
+            "OR NULLIF(TRIM(master_rows.currency), '') IS NOT NULL)"
         )
     if search and search.strip():
         params["q"] = f"%{search.strip()}%"
         if is_infopack:
             where.append(
-                "(LOWER(COALESCE(cedant_code, '')) LIKE LOWER(:q) OR LOWER(COALESCE(class_code, '')) LIKE LOWER(:q) "
-                "OR LOWER(COALESCE(title, '')) LIKE LOWER(:q) OR LOWER(COALESCE(value, '')) LIKE LOWER(:q) "
-                "OR LOWER(COALESCE(cob, '')) LIKE LOWER(:q) "
-                "OR LOWER(CAST(COALESCE(gross, 0) AS TEXT)) LIKE LOWER(:q) "
-                "OR LOWER(CAST(COALESCE(tsi, 0) AS TEXT)) LIKE LOWER(:q) "
-                "OR LOWER(COALESCE(sheet_name, '')) LIKE LOWER(:q))"
+                "(LOWER(COALESCE(master_rows.cedant_code, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.class_code, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.title, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.value, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.cob, '')) LIKE LOWER(:q) "
+                "OR LOWER(CAST(COALESCE(master_rows.gross, 0) AS TEXT)) LIKE LOWER(:q) "
+                "OR LOWER(CAST(COALESCE(master_rows.tsi, 0) AS TEXT)) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.sheet_name, '')) LIKE LOWER(:q))"
             )
         else:
             where.append(
-                "(LOWER(COALESCE(cedant_code, '')) LIKE LOWER(:q) OR LOWER(COALESCE(doc_no, '')) LIKE LOWER(:q) "
-                "OR LOWER(COALESCE(currency, '')) LIKE LOWER(:q) OR LOWER(COALESCE(sheet_name, '')) LIKE LOWER(:q) "
-                "OR LOWER(CAST(COALESCE(outstanding, 0) AS TEXT)) LIKE LOWER(:q))"
+                "(LOWER(COALESCE(master_rows.cedant_code, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.doc_no, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.currency, '')) LIKE LOWER(:q) "
+                "OR LOWER(COALESCE(master_rows.sheet_name, '')) LIKE LOWER(:q) "
+                "OR LOWER(CAST(COALESCE(master_rows.outstanding, 0) AS TEXT)) LIKE LOWER(:q))"
             )
+    filter_columns = (
+        {
+            "class_code": class_code,
+            "title": title,
+            "value": value,
+            "sheet_name": sheet_name,
+            "dol": dol,
+            "cob": cob,
+            "gross": gross,
+            "tsi": tsi,
+        }
+        if is_infopack
+        else {
+            "doc_no": loss_ref,
+            "cedant_code": cedant_code,
+            "dol": dol,
+            "currency": currency,
+            "outstanding": outstanding,
+        }
+    )
+    for column, value_filter in filter_columns.items():
+        if value_filter and value_filter.strip():
+            parameter = f"filter_{column}"
+            where.append(
+                f"LOWER(COALESCE(CAST(master_rows.{column} AS TEXT), '')) "
+                f"LIKE LOWER(:{parameter})"
+            )
+            params[parameter] = f"%{value_filter.strip()}%"
+    if is_infopack and period and period.strip():
+        where.append(
+            "LOWER(CONCAT(COALESCE(CAST(master_rows.month AS TEXT), ''), '/', "
+            "COALESCE(CAST(master_rows.year AS TEXT), ''))) LIKE LOWER(:filter_period)"
+        )
+        params["filter_period"] = f"%{period.strip()}%"
+    if cedant_name and cedant_name.strip():
+        where.append(
+            "EXISTS (SELECT 1 FROM rekonsiliasi.master_oscedant_code AS cedant_lookup "
+            "WHERE cedant_lookup.cedant_code = master_rows.cedant_code "
+            "AND LOWER(COALESCE(cedant_lookup.cedant_name, '')) "
+            "LIKE LOWER(:filter_cedant_name))"
+        )
+        params["filter_cedant_name"] = f"%{cedant_name.strip()}%"
+
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
-    total = db.execute(    text(f"SELECT COUNT(*) FROM {_qualified_master_table(table)}{where_sql}"), params).scalar() or 0
+    total = db.execute(
+        text(f"SELECT COUNT(*) FROM {table_name} AS master_rows{where_sql}"),
+        params,
+    ).scalar() or 0
     rows  = db.execute(
-        text(f"SELECT * FROM {_qualified_master_table(table)}{where_sql} ORDER BY id DESC LIMIT :lim OFFSET :off"),
+        text(
+            f"SELECT master_rows.*, "
+            "COALESCE(NULLIF((SELECT BTRIM(cedant_lookup.cedant_name) "
+            "FROM rekonsiliasi.master_oscedant_code AS cedant_lookup "
+            "WHERE cedant_lookup.cedant_code = master_rows.cedant_code "
+            "ORDER BY cedant_lookup.cedant_name LIMIT 1), ''), "
+            "master_rows.cedant_code) AS cedant_name "
+            f"FROM {table_name} AS master_rows{where_sql} "
+            "ORDER BY master_rows.id DESC LIMIT :lim OFFSET :off"
+        ),
         {**params, "lim": limit, "off": skip},
     ).mappings().all()
 
@@ -3835,6 +4226,7 @@ def get_master_data(
             base_row_data = {
                 **full_cols,
                 "cedant_code": r.get("cedant_code"), "class_code": r.get("class_code"),
+                "cedant_name": r.get("cedant_name"),
                 "title": r.get("title"), "value": r.get("value"),
                 "row_index": r.get("row_index"), "month": r.get("month"), "year": r.get("year"),
                 "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
@@ -3847,6 +4239,7 @@ def get_master_data(
                 "id": r.get("id"), "tipe_data": "Infopack",
                 "bulan": str(r.get("month") or ""), "tahun": str(r.get("year") or ""),
                 "cedant": r.get("cedant_code"),
+                "cedant_name": r.get("cedant_name"),
                 "primary_key_value": pk_val,
                 "source_job_id": None, "sheet_name": r.get("sheet_name"),
                 "row_data": base_row_data,
@@ -3864,6 +4257,8 @@ def get_master_data(
             base_row_data = {
                 **full_cols,
                 "doc_no": doc_no, "dol": dol_str,
+                "cedant_code": r.get("cedant_code"),
+                "cedant_name": r.get("cedant_name"),
                 "outstanding": str(outstanding) if outstanding is not None else "",
                 "currency": r.get("currency"),
                 "month": r.get("month"), "year": r.get("year"),
@@ -3874,6 +4269,7 @@ def get_master_data(
                 "id": r.get("id"), "tipe_data": "OS Cedant",
                 "bulan": str(r.get("month") or ""), "tahun": str(r.get("year") or ""),
                 "cedant": r.get("cedant_code"),
+                "cedant_name": r.get("cedant_name"),
                 "primary_key_value": doc_no,
                 "source_job_id": None, "sheet_name": r.get("sheet_name"),
                 "row_data": base_row_data,

@@ -1,60 +1,182 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useColumnMappings } from "../hooks/useColumnMappings";
+import { addColumnMappingVersion } from "../services/api";
 import {
   AdjustmentsHorizontalIcon,
   MagnifyingGlassIcon,
   ArrowPathIcon,
-  CheckCircleIcon,
-  ExclamationTriangleIcon,
   InformationCircleIcon,
-  TagIcon,
-  CurrencyDollarIcon,
-  CalendarIcon,
+  PlusIcon,
+  CheckIcon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 
-/* --- colour helpers ----------------------------------------- */
-const BROKER_COLOR = "text-teal-700 font-semibold";
-const CEDANT_COLOR = "font-semibold text-gray-800";
+const DATASET_BY_TAB = {
+  os: "OS Cedant",
+  infopack: "Infopack",
+};
 
-function isBroker(name) { return name.toLowerCase().includes("broker"); }
+const FIELD_LABELS = {
+  doc_no: "loss_ref",
+  title: "insured",
+};
 
-/* --- main page ----------------------------------------------- */
-export default function MappingRulesPage() {
-  const [activeTab, setActiveTab] = useState("os");
-  const [search,    setSearch]    = useState("");
-  const { profiles: allProfiles, loading, error, reload } = useColumnMappings();
+function buildVersionGroups(versions) {
+  const grouped = new Map();
 
-  const profiles = allProfiles.filter(p =>
-    p.tipe_data === (activeTab === "os" ? "OS Cedant" : "Infopack")
-  );
+  versions.forEach((profile) => {
+    const sheetNames = [...new Set(profile.sheetNames || [])].sort((a, b) =>
+      a.localeCompare(b),
+    );
+    const sheetKey = sheetNames.map((name) => name.toLowerCase()).join("|") || "*";
+    const key = `${profile.tipe_data}|${profile.cedantCode}|${sheetKey}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        key,
+        cedant: profile.cedant,
+        cedantCode: profile.cedantCode,
+        tipeData: profile.tipe_data,
+        sheetNames,
+        sheetMet: profile.sheetMet || (sheetNames.length ? sheetNames.join(", ") : "All sheets"),
+        versions: new Map(),
+      });
+    }
 
-  const filtered = profiles.filter(p => {
-    const q = search.toLowerCase();
-    return !q
-      || p.cedant.toLowerCase().includes(q)
-      || p.cedantCode.toLowerCase().includes(q)
-      || p.sheetMet.toLowerCase().includes(q)
-      || p.lossRef.toLowerCase().includes(q)
-      || p.outstanding.toLowerCase().includes(q)
-      || p.dateOfLoss.toLowerCase().includes(q)
-      || Object.entries(p.mapping).some(([field, column]) =>
-        `${field} ${column}`.toLowerCase().includes(q)
-      );
+    const group = grouped.get(key);
+    const versionNumber = Number(profile.mappingVersion) || 1;
+    const version = group.versions.get(versionNumber) || { mapping: {} };
+    Object.assign(version.mapping, profile.mapping || {});
+    group.versions.set(versionNumber, version);
   });
 
-  const readyCount = profiles.filter(p => p.status === "READY").length;
+  return [...grouped.values()]
+    .map((group) => ({
+      ...group,
+      versions: [...group.versions.entries()]
+        .map(([versionNumber, version]) => ({
+          versionNumber,
+          mapping: version.mapping,
+        }))
+        .sort((a, b) => a.versionNumber - b.versionNumber),
+    }))
+    .sort((a, b) =>
+      `${a.cedant} ${a.sheetMet}`.localeCompare(`${b.cedant} ${b.sheetMet}`),
+    );
+}
+
+function fieldLabel(fieldName) {
+  return FIELD_LABELS[fieldName] || fieldName;
+}
+
+export default function MappingRulesPage() {
+  const [activeTab, setActiveTab] = useState("os");
+  const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [savingKey, setSavingKey] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+  const {
+    profiles,
+    mappingVersions,
+    mappingFields,
+    loading,
+    error,
+    reload,
+  } = useColumnMappings();
+
+  const datasetType = DATASET_BY_TAB[activeTab];
+  const activeProfiles = profiles.filter((profile) => profile.tipe_data === datasetType);
+  const activeVersions = mappingVersions.filter(
+    (profile) => profile.tipe_data === datasetType,
+  );
+  const versionGroups = useMemo(() => {
+    if (activeVersions.length) return buildVersionGroups(activeVersions);
+
+    return buildVersionGroups(
+      activeProfiles.map((profile) => ({
+        ...profile,
+        mappingVersion: profile.mappingVersion || 1,
+      })),
+    );
+  }, [activeProfiles, activeVersions]);
+
+  const catalogFields = mappingFields
+    .filter((field) => field.dataset_type === datasetType)
+    .map((field) => field.field_name);
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredGroups = versionGroups.filter((group) => {
+    if (!normalizedSearch) return true;
+    const mappedValues = group.versions.flatMap((version) =>
+      Object.entries(version.mapping).flat(),
+    );
+    return [
+      group.cedant,
+      group.cedantCode,
+      group.sheetMet,
+      ...mappedValues,
+    ].some((value) => String(value).toLowerCase().includes(normalizedSearch));
+  });
+  const totalVersions = versionGroups.reduce(
+    (count, group) => count + group.versions.length,
+    0,
+  );
+
+  const handleAddMapping = async (group, fieldName) => {
+    const latestVersion = group.versions[group.versions.length - 1];
+    const editKey = `${group.key}:${fieldName}`;
+    const headerName = editing?.key === editKey ? editing.value.trim() : "";
+    if (!headerName) return;
+    if (!window.confirm("Apakah Anda yakin ingin menyimpan mapping ini sebagai versi baru?")) {
+      return;
+    }
+
+    setSavingKey(editKey);
+    setSaveError("");
+    setSaveMessage("");
+    try {
+      const mapping = {
+        ...(latestVersion?.mapping || {}),
+        [fieldName]: headerName,
+      };
+      await addColumnMappingVersion({
+        cedant_code: group.cedantCode,
+        dataset_type: datasetType,
+        sheet_names: group.sheetNames,
+        mapping,
+      });
+      setEditing(null);
+      setSaveMessage(
+        `Mapping ${fieldLabel(fieldName)} berhasil disimpan sebagai versi baru.`,
+      );
+      await reload();
+    } catch (requestError) {
+      setSaveError(requestError.message || "Gagal menyimpan mapping.");
+    } finally {
+      setSavingKey("");
+    }
+  };
+
+  const startEditing = (group, fieldName) => {
+    const latestVersion = group.versions[group.versions.length - 1];
+    setSaveError("");
+    setSaveMessage("");
+    setEditing({
+      key: `${group.key}:${fieldName}`,
+      value: latestVersion?.mapping?.[fieldName] || "",
+    });
+  };
 
   return (
     <div className="flex-1 flex flex-col bg-gray-50 overflow-auto">
-
-      {/* Sticky header */}
       <div className="page-header">
         <div className="h-8 w-8 rounded-xl bg-teal-600 flex items-center justify-center flex-shrink-0">
           <AdjustmentsHorizontalIcon className="h-4 w-4 text-white" />
         </div>
         <div>
           <h1 className="text-base font-bold text-gray-800">Mapping Rules</h1>
-          <p className="text-xs text-gray-400">Profil pemetaan kolom dari database &mdash; read only</p>
+          <p className="text-xs text-gray-400">
+            Lihat riwayat versi dan tambahkan mapping kolom
+          </p>
         </div>
         <button
           onClick={reload}
@@ -66,14 +188,21 @@ export default function MappingRulesPage() {
         </button>
       </div>
 
-      <div className="px-6 py-6 flex flex-col gap-5 max-w-6xl w-full">
-
-        {/* Tabs */}
+      <div className="px-6 py-6 flex flex-col gap-5 max-w-7xl w-full">
         <div className="flex gap-0 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
-          {[["os","OS Claim Cedant"],["infopack","InfoPack"]].map(([key, label]) => (
+          {[
+            ["os", "OS Claim Cedant"],
+            ["infopack", "InfoPack"],
+          ].map(([key, label]) => (
             <button
               key={key}
-              onClick={() => { setActiveTab(key); setSearch(""); }}
+              onClick={() => {
+                setActiveTab(key);
+                setSearch("");
+                setEditing(null);
+                setSaveError("");
+                setSaveMessage("");
+              }}
               className={[
                 "px-5 py-1.5 rounded-lg text-sm font-medium transition-all",
                 activeTab === key
@@ -86,179 +215,244 @@ export default function MappingRulesPage() {
           ))}
         </div>
 
-        {/* Section title */}
         <div>
-          <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">REFERENCE INTELLIGENCE</p>
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-extrabold text-gray-800">
-                Mapping Rules &mdash; {activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}
-              </h2>
-              <p className="text-xs text-gray-400 mt-1 max-w-xl">
-                Mapping aktif dibaca langsung dari tabel <code>master_mapping_column</code> dan field referensinya.
-              </p>
-            </div>
-          </div>
+          <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">
+            REFERENCE INTELLIGENCE
+          </p>
+          <h2 className="text-2xl font-extrabold text-gray-800">
+            Mapping Rules &mdash; {datasetType}
+          </h2>
+          <p className="text-xs text-gray-400 mt-1 max-w-2xl">
+            Setiap baris adalah field dan setiap kolom adalah versi mapping. Tekan{" "}
+            <span className="font-bold text-teal-700">+</span> untuk menambahkan atau
+            memperbarui mapping pada versi baru.
+          </p>
         </div>
 
         {error && (
-          <div role="alert" className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+          <div
+            role="alert"
+            className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm"
+          >
             Mapping database gagal dimuat: {error}
           </div>
         )}
+        {saveError && (
+          <div
+            role="alert"
+            className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm"
+          >
+            {saveError}
+          </div>
+        )}
+        {saveMessage && (
+          <div
+            role="status"
+            className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl text-sm"
+          >
+            {saveMessage}
+          </div>
+        )}
 
-        {/* Info card */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4 flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Mapping database</span>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-xs text-teal-700 font-mono">master_mapping_column</span>
-            <span className="ml-auto text-xs text-gray-500">
-              {loading ? "Memuat…" : `${profiles.length} profil`}
-            </span>
-          </div>
-
-          {/* Legend */}
-          <div className="flex items-center gap-4 pt-1 border-t border-gray-50 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 text-xs text-orange-600">
-              <TagIcon className="h-3.5 w-3.5" /> Loss Ref
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-xs text-purple-600">
-              <CurrencyDollarIcon className="h-3.5 w-3.5" /> Outstanding
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-xs text-blue-600">
-              <CalendarIcon className="h-3.5 w-3.5" /> Date of Loss
-            </span>
-          </div>
-
-          {/* Sheet number note */}
-          <div className="bg-gray-50 rounded-xl px-4 py-3 flex items-start gap-2 text-xs text-gray-500">
-            <InformationCircleIcon className="h-4 w-4 text-gray-400 flex-shrink-0 mt-0.5" />
-            <span>
-              <strong className="text-gray-700">Aturan sheet:</strong>{" "}
-              Mapping diterapkan sesuai daftar sheet pada kolom <code>argument</code>.
-              Jika daftar sheet kosong, mapping berlaku untuk semua sheet.
-            </span>
-          </div>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4 flex flex-wrap items-center gap-3">
+          <InformationCircleIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
+          <span className="text-xs text-gray-500">
+            Mapping disimpan sebagai versi baru dan versi sebelumnya tetap tersedia.
+          </span>
+          <span className="ml-auto text-xs text-gray-500">
+            {loading ? "Memuat…" : `${versionGroups.length} cedant/sheet · ${totalVersions} versi`}
+          </span>
         </div>
 
-        {/* Search */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-2.5 flex items-center gap-3">
           <MagnifyingGlassIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
           <input
             type="text"
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Cari cedant, sheet, kolom, loss ref, outstanding..."
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Cari cedant, sheet, field, atau header..."
             className="flex-1 text-sm bg-transparent focus:outline-none text-gray-700 placeholder-gray-400"
           />
           {search && (
-            <button onClick={() => setSearch("")} className="text-xs text-gray-400 hover:text-gray-600 px-1">
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="text-xs text-gray-400 hover:text-gray-600 px-1"
+              aria-label="Hapus pencarian"
+            >
               &#x2715;
             </button>
           )}
           <span className="text-xs text-gray-400 flex-shrink-0">
-            {filtered.length} / {profiles.length}
+            {filteredGroups.length} / {versionGroups.length}
           </span>
         </div>
 
-        {/* Table */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Cedant Code</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide min-w-[160px]">Cedant</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide min-w-[140px]">Sheet Met</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-orange-500 uppercase tracking-wide min-w-[120px]">
-                    <span className="inline-flex items-center gap-1"><TagIcon className="h-3 w-3" /> Loss Ref</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-purple-500 uppercase tracking-wide min-w-[140px]">
-                    <span className="inline-flex items-center gap-1"><CurrencyDollarIcon className="h-3 w-3" /> Outstanding</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-blue-500 uppercase tracking-wide whitespace-nowrap">
-                    <span className="inline-flex items-center gap-1"><CalendarIcon className="h-3 w-3" /> Date of Loss</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-indigo-500 uppercase tracking-wide">Mapped Fields</th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="text-center py-12 text-gray-400">
-                      {loading ? "Memuat mapping database…" : "Tidak ada profil yang cocok dengan pencarian."}
-                    </td>
-                  </tr>
-                )}
-                {filtered.map((p, i) => (
-                  <tr key={`${p.cedantCode}-${p.sheetMet}-${i}`} className="hover:bg-teal-50/30 transition-colors">
-                    {/* Column */}
-                    <td className="px-3 py-1.5">
-                      <span className="font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded text-[11px]">
-                        {p.cedantCode || "—"}
-                      </span>
-                    </td>
-                    {/* Cedant */}
-                    <td className={`px-3 py-1.5 whitespace-nowrap ${isBroker(p.cedant) ? BROKER_COLOR : CEDANT_COLOR}`}>
-                      {p.cedant}
-                    </td>
-                    {/* Sheet Met */}
-                    <td className="px-3 py-1.5 text-gray-500 max-w-[200px]">
-                      <span className="truncate block" title={p.sheetMet}>{p.sheetMet}</span>
-                    </td>
-                    {/* Loss Ref */}
-                    <td className="px-3 py-1.5 whitespace-nowrap text-gray-700 font-medium">
-                      {p.lossRef}
-                    </td>
-                    {/* Outstanding */}
-                    <td className="px-3 py-1.5 text-gray-700">
-                      <span className="truncate block max-w-[180px]" title={p.outstanding}>{p.outstanding}</span>
-                    </td>
-                    {/* Date of Loss */}
-                    <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">
-                      {p.dateOfLoss}
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <div className="flex flex-wrap gap-1 max-w-[320px]">
-                        {Object.entries(p.mapping).map(([field, column]) => (
-                          <span key={field} className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
-                            {field} &rarr; {column}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    {/* Status */}
-                    <td className="px-3 py-1.5">
-                      {p.status === "READY" ? (
-                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded">
-                          <CheckCircleIcon className="h-2.5 w-2.5" />READY
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded">
-                          <ExclamationTriangleIcon className="h-2.5 w-2.5" />INCOMPLETE
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {filteredGroups.length === 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm text-center py-12 text-gray-400 text-sm">
+            {loading ? "Memuat mapping database…" : "Tidak ada mapping yang cocok dengan pencarian."}
           </div>
+        )}
 
-          {/* Table footer */}
-          <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-            <span className="text-xs text-gray-400">
-              Menampilkan <strong className="text-gray-600">{filtered.length}</strong> dari{" "}
-              <strong className="text-gray-600">{profiles.length}</strong> profil &middot;{" "}
-              <span className="text-emerald-600 font-semibold">{readyCount} READY</span>
-            </span>
-            <span className="text-xs text-gray-400">Source: database &middot; read only</span>
-          </div>
-        </div>
+        {filteredGroups.map((group) => {
+          const fieldNames = [
+            ...new Set([
+              ...catalogFields,
+              ...group.versions.flatMap((version) => Object.keys(version.mapping)),
+            ]),
+          ].sort((a, b) => fieldLabel(a).localeCompare(fieldLabel(b)));
+          const versionNumbers = group.versions.map((version) => version.versionNumber);
+          const nextVersion = Math.max(0, ...versionNumbers) + 1;
+          const latestVersion = group.versions[group.versions.length - 1];
 
+          return (
+            <section
+              key={group.key}
+              className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden"
+            >
+              <div className="px-4 py-3 flex flex-wrap items-center gap-2 border-b border-gray-100">
+                <span className="font-mono font-bold text-teal-700 bg-teal-50 px-2 py-1 rounded text-xs">
+                  {group.cedantCode || "—"}
+                </span>
+                <span className="text-sm font-semibold text-gray-800">{group.cedant}</span>
+                <span className="text-xs text-gray-400">· Sheet: {group.sheetMet}</span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">
+                        Cedant
+                      </th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">
+                        Field
+                      </th>
+                      {versionNumbers.map((version) => (
+                        <th
+                          key={version}
+                          className="px-3 py-2.5 text-left font-semibold text-teal-700 uppercase tracking-wide min-w-[160px]"
+                        >
+                          Mapping Ver {version}
+                        </th>
+                      ))}
+                      <th className="px-3 py-2.5 text-left font-semibold text-teal-700 uppercase tracking-wide min-w-[190px]">
+                        Mapping Ver {nextVersion}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {fieldNames.map((fieldName) => {
+                      const editKey = `${group.key}:${fieldName}`;
+                      const isEditing = editing?.key === editKey;
+                      return (
+                        <tr
+                          key={fieldName}
+                          className="hover:bg-teal-50/30 transition-colors"
+                        >
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+                            {group.cedantCode || group.cedant}
+                          </td>
+                          <td className="px-3 py-2 font-mono font-semibold text-gray-700 whitespace-nowrap">
+                            {fieldLabel(fieldName)}
+                          </td>
+                          {group.versions.map((version) => (
+                            <td
+                              key={version.versionNumber}
+                              className="px-3 py-2 text-gray-700 whitespace-nowrap"
+                            >
+                              {version.mapping[fieldName] || (
+                                <span className="text-gray-300">—</span>
+                              )}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2">
+                            {isEditing ? (
+                              <form
+                                className="flex items-center gap-1.5"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  handleAddMapping(group, fieldName);
+                                }}
+                              >
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={editing.value}
+                                  onChange={(event) =>
+                                    setEditing((current) => ({
+                                      ...current,
+                                      value: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Nama kolom Excel"
+                                  className="w-40 rounded-lg border border-teal-300 px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                                />
+                                <button
+                                  type="submit"
+                                  disabled={!editing.value.trim() || savingKey === editKey}
+                                  className="rounded-lg bg-teal-600 p-1.5 text-white hover:bg-teal-700 disabled:opacity-40"
+                                  aria-label="Simpan mapping"
+                                  title="Simpan mapping"
+                                >
+                                  <CheckIcon className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditing(null)}
+                                  disabled={savingKey === editKey}
+                                  className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                                  aria-label="Batal"
+                                  title="Batal"
+                                >
+                                  <XMarkIcon className="h-3.5 w-3.5" />
+                                </button>
+                              </form>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEditing(group, fieldName)}
+                                disabled={Boolean(savingKey)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-40"
+                                aria-label={`Tambah mapping ${fieldLabel(fieldName)}`}
+                                title="Tambah mapping ke versi baru"
+                              >
+                                <PlusIcon className="h-4 w-4" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {fieldNames.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={versionNumbers.length + 3}
+                          className="px-4 py-8 text-center text-gray-400"
+                        >
+                          Belum ada field mapping untuk profil ini.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">
+                Versi aktif:{" "}
+                <strong className="text-gray-700">
+                  {latestVersion ? `Mapping Ver ${latestVersion.versionNumber}` : "Belum ada"}
+                </strong>
+                {" · "}
+                <span className="text-emerald-700 font-semibold">
+                  {latestVersion
+                    ? `${Object.keys(latestVersion.mapping).length} field terpetakan`
+                    : "Tambah mapping pertama"}
+                </span>
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );

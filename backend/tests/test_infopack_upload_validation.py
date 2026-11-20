@@ -2,10 +2,12 @@ import unittest
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from openpyxl import Workbook
 
+from app.services import excel_service
 from app.routers.master import (
     _auto_match_headers_for_sheet,
     _find_identical_mapping_version,
@@ -166,27 +168,53 @@ class InfopackUploadValidationTests(unittest.TestCase):
             )
         )
 
-    def test_raw_ingestion_preserves_duplicate_rows_and_excel_row_numbers(self):
+    def test_raw_ingestion_opens_workbook_once_and_preserves_excel_row_numbers(self):
         workbook = Workbook()
         worksheet = workbook.active
         worksheet.title = "Claims"
         worksheet.append(["DOL", "Gross"])
         worksheet.append(["2025-01-02", "100"])
+        worksheet.append([None, None])
         worksheet.append(["2025-01-02", "100"])
         data = BytesIO()
         workbook.save(data)
 
-        result = ingest_excel_raw(data.getvalue(), "Claims")
+        original_loader = excel_service.openpyxl.load_workbook
+        with patch.object(
+            excel_service.openpyxl,
+            "load_workbook",
+            wraps=original_loader,
+        ) as workbook_loader:
+            result = ingest_excel_raw(data.getvalue(), "Claims")
 
+        self.assertEqual(workbook_loader.call_count, 1)
         self.assertEqual(result["total_rows"], 2)
         self.assertEqual(
             [row["excel_row"] for row in result["rows"]],
-            [2, 3],
+            [2, 4],
         )
         self.assertEqual(
             result["rows"][0]["data"],
             result["rows"][1]["data"],
         )
+
+    def test_empty_sheet_returns_no_columns_instead_of_indexing_missing_header(self):
+        workbook = unittest.mock.Mock()
+        workbook.sheet_names = ["Empty"]
+
+        with patch.object(
+            excel_service.pd,
+            "read_excel",
+            return_value=excel_service.pd.DataFrame(),
+        ):
+            result, sheet_name, header_row = excel_service._read_excel_with_header_row(
+                b"", "Empty", workbook
+            )
+
+        self.assertTrue(result.empty)
+        self.assertEqual(list(result.columns), [])
+        self.assertEqual(sheet_name, "Empty")
+        self.assertEqual(header_row, 0)
 
 
 if __name__ == "__main__":

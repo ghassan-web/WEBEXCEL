@@ -205,9 +205,9 @@ export default function MappingRulesPage() {
               className={[
                 "px-5 py-1.5 rounded-lg text-sm font-medium transition-all",
                 activeTab === key
-                  ? "bg-[var(--color-brand)] text-white shadow-sm"
-                  : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-              }`}
+                  ? "bg-white shadow text-teal-700 font-semibold border border-gray-200"
+                  : "text-gray-500 hover:text-gray-700",
+              ].join(" ")}
             >
               {label}
             </button>
@@ -227,7 +227,6 @@ export default function MappingRulesPage() {
             memperbarui mapping pada versi baru.
           </p>
         </div>
-      )}
 
         {error && (
           <div
@@ -263,7 +262,6 @@ export default function MappingRulesPage() {
             {loading ? "Memuat…" : `${versionGroups.length} cedant/sheet · ${totalVersions} versi`}
           </span>
         </div>
-      </Card>
 
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-2.5 flex items-center gap-3">
           <MagnifyingGlassIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />

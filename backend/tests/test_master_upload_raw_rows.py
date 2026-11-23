@@ -8,6 +8,7 @@ from app.routers.master import (
     _build_workflow_cedant_row,
     _build_os_mapping_profiles,
     _cedant_result_table_name,
+    _delete_cedant_result_period,
     _extract_cedant_row,
     _extract_cedant_row_with_mapping,
     _has_cedant_result_values,
@@ -15,6 +16,8 @@ from app.routers.master import (
     _build_mapping_version_profiles,
     _normalize_manual_mapping,
     _raw_primary_key,
+    _replace_cedant_master_period,
+    _write_cedant_rows,
     add_mapping_version,
     get_column_mappings,
     get_master_data,
@@ -35,6 +38,196 @@ class RawPrimaryKeyTests(unittest.TestCase):
         source_row = {"pk": "source-key", "data": {"Other": "value"}}
 
         self.assertEqual(_raw_primary_key(source_row, 0, {}), "source-key")
+
+
+class CedantMasterWriteTests(unittest.TestCase):
+    class FakeQuery:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class FakeDatabase:
+        def __init__(self, existing_rows):
+            self.existing_rows = existing_rows
+            self.executed = []
+
+        def query(self, *_args):
+            return CedantMasterWriteTests.FakeQuery(self.existing_rows)
+
+        def execute(self, query, parameters=None):
+            self.executed.append((str(query), parameters or {}))
+
+    @staticmethod
+    def row(month, outstanding):
+        return {
+            "cedant_code": "C001",
+            "doc_no": "CLAIM-1",
+            "dol": date(2025, 1, 2),
+            "outstanding": outstanding,
+            "currency": "USD",
+            "month": month,
+            "year": 2025,
+            "file_name": "claims.xlsx",
+            "sheet_name": "Claims",
+        }
+
+    def test_same_claim_and_period_replaces_existing_master_row(self):
+        database = self.FakeDatabase([(7, "C001", "CLAIM-1", 1, 2025)])
+
+        stats = _write_cedant_rows(database, [self.row(1, 250)])
+
+        updates = [
+            parameters
+            for query, parameters in database.executed
+            if query.startswith("UPDATE rekonsiliasi.master_os_cedant_web")
+        ]
+        inserts = [
+            parameters
+            for query, parameters in database.executed
+            if query.startswith("INSERT INTO rekonsiliasi.master_os_cedant_web")
+        ]
+        self.assertEqual(stats, {"inserted": 0, "skipped": 0, "updated": 1})
+        self.assertEqual(updates[0][0]["id"], 7)
+        self.assertEqual(updates[0][0]["outstanding"], 250)
+        self.assertEqual(inserts, [])
+
+    def test_same_claim_in_new_period_is_appended(self):
+        database = self.FakeDatabase([(7, "C001", "CLAIM-1", 1, 2025)])
+
+        stats = _write_cedant_rows(database, [self.row(2, 250)])
+
+        inserts = [
+            parameters
+            for query, parameters in database.executed
+            if query.startswith("INSERT INTO rekonsiliasi.master_os_cedant_web")
+        ]
+        self.assertEqual(stats, {"inserted": 1, "skipped": 0, "updated": 0})
+        self.assertEqual(inserts[0][0]["month"], 2)
+
+    def test_first_upload_for_batch_replaces_all_rows_for_cedant_period(self):
+        class FakeResult:
+            rowcount = 3
+
+            def scalar_one(self):
+                return False
+
+        class FakeDatabase:
+            def __init__(self):
+                self.executed = []
+
+            def execute(self, query, parameters=None):
+                query_text = str(query)
+                self.executed.append((query_text, parameters or {}))
+                return FakeResult()
+
+        database = FakeDatabase()
+
+        deleted = _replace_cedant_master_period(
+            database,
+            cedant_code="C001",
+            month=1,
+            year=2025,
+            batch_id=10,
+        )
+
+        delete_query, delete_parameters = next(
+            (query, parameters)
+            for query, parameters in database.executed
+            if query.startswith("DELETE FROM rekonsiliasi.master_os_cedant_web")
+        )
+        self.assertEqual(deleted, (3, True))
+        self.assertIn("AND month = :month AND year = :year", delete_query)
+        self.assertEqual(
+            delete_parameters,
+            {"cedant_code": "C001", "month": 1, "year": 2025},
+        )
+
+    def test_later_sheet_in_same_batch_does_not_replace_period_again(self):
+        class FakeResult:
+            rowcount = 3
+
+            def scalar_one(self):
+                return True
+
+        class FakeDatabase:
+            def __init__(self):
+                self.executed = []
+
+            def execute(self, query, parameters=None):
+                query_text = str(query)
+                self.executed.append((query_text, parameters or {}))
+                return FakeResult()
+
+        database = FakeDatabase()
+
+        deleted = _replace_cedant_master_period(
+            database,
+            cedant_code="C001",
+            month=1,
+            year=2025,
+            batch_id=10,
+        )
+
+        self.assertEqual(deleted, (0, False))
+        self.assertFalse(
+            any(
+                query.startswith("DELETE FROM rekonsiliasi.master_os_cedant_web")
+                for query, _ in database.executed
+            )
+        )
+
+    def test_result_table_replacement_is_scoped_to_cedant_and_period(self):
+        class FakePreparer:
+            def quote(self, identifier):
+                return f'"{identifier}"'
+
+        class FakeDialect:
+            identifier_preparer = FakePreparer()
+
+        class FakeBind:
+            dialect = FakeDialect()
+
+        class FakeResult:
+            rowcount = 14
+
+        class FakeDatabase:
+            def __init__(self):
+                self.executed = []
+
+            def get_bind(self):
+                return FakeBind()
+
+            def execute(self, query, parameters=None):
+                self.executed.append((str(query), parameters or {}))
+                return FakeResult()
+
+        database = FakeDatabase()
+
+        deleted = _delete_cedant_result_period(
+            database,
+            table_name="os_claim_cedant_aca",
+            cedant_code="9A011",
+            month=1,
+            year=2025,
+        )
+
+        query, parameters = database.executed[0]
+        self.assertEqual(deleted, 14)
+        self.assertIn('DELETE FROM hasil_rekonsiliasi."os_claim_cedant_aca"', query)
+        self.assertIn("reporting_month = :month", query)
+        self.assertIn("reporting_year = :year", query)
+        self.assertEqual(
+            parameters,
+            {"cedant_code": "9A011", "month": 1, "year": 2025},
+        )
 
 
 class CedantRowExtractionTests(unittest.TestCase):

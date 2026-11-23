@@ -525,7 +525,9 @@ export default function ComparePage({ onNavigate }) {
       setPreparedUpload(updatedPrepared);
       const resultMessage = sheet.status === "empty"
         ? "Sheet berhasil diarsipkan; tidak ada baris data untuk diproses."
-        : `Upload berhasil. ${confirmed.rows_appended} baris ditambahkan, ${confirmed.rows_updated} dilengkapi, dan ${confirmed.rows_skipped} dilewati.`;
+        : confirmed.period_replaced
+          ? `Periode lama diganti: ${confirmed.rows_replaced} baris Master dan ${confirmed.result_rows_replaced} baris hasil lama dihapus; ${confirmed.rows_appended} baris Master dan ${confirmed.result_rows_appended} baris hasil baru disimpan.`
+        : `Upload berhasil. ${confirmed.rows_appended} baris ditambahkan, ${confirmed.rows_updated} diganti pada periode yang sama, dan ${confirmed.rows_skipped} dilewati.`;
       const res = {
         ...confirmed,
         ...updatedPrepared,

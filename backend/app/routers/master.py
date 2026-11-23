@@ -1369,7 +1369,52 @@ def _raw_primary_key(row: dict, row_index: int, rows_by_source_index: dict) -> s
     return str(value or "").strip()
 
 
-def _write_cedant_rows(db: Session, rows: list) -> dict:
+def _replace_cedant_master_period(
+    db: Session,
+    *,
+    cedant_code: str,
+    month: int,
+    year: int,
+    batch_id: int,
+) -> tuple[int, bool]:
+    lock_key = f"{cedant_code}|{month}|{year}"
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": lock_key},
+    )
+    already_replaced_in_batch = db.execute(
+        text(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM rekonsiliasi.upload_table "
+            "WHERE batch_id = :batch_id AND confirmed_at IS NOT NULL"
+            ")"
+        ),
+        {"batch_id": batch_id},
+    ).scalar_one()
+    if already_replaced_in_batch:
+        return 0, False
+
+    result = db.execute(
+        text(
+            "DELETE FROM rekonsiliasi.master_os_cedant_web "
+            "WHERE cedant_code = :cedant_code "
+            "AND month = :month AND year = :year"
+        ),
+        {
+            "cedant_code": cedant_code,
+            "month": month,
+            "year": year,
+        },
+    )
+    return max(result.rowcount or 0, 0), True
+
+
+def _write_cedant_rows(
+    db: Session,
+    rows: list,
+    *,
+    period_locked: bool = False,
+) -> dict:
     if not rows:
         return {"inserted": 0, "skipped": 0, "updated": 0}
 
@@ -1382,68 +1427,74 @@ def _write_cedant_rows(db: Session, rows: list) -> dict:
     if not rows:
         return {"inserted": 0, "skipped": empty_rows_skipped, "updated": 0}
 
-    # Pisahkan rows yang punya doc_no (bisa di-dedup) vs yang tidak (selalu insert)
+    periods = sorted(
+        {
+            (
+                str(row.get("cedant_code") or ""),
+                int(row["month"]) if row.get("month") is not None else None,
+                int(row["year"]) if row.get("year") is not None else None,
+            )
+            for row in rows
+        },
+        key=lambda period: tuple("" if value is None else str(value) for value in period),
+    )
+    if not period_locked:
+        for cedant_code, month, year in periods:
+            lock_key = f"{cedant_code}|{month}|{year}"
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
+
+    # A claim is replaceable only within its reporting period.
     rows_with_key   = [r for r in rows if r.get("doc_no")]
     rows_without_key = [r for r in rows if not r.get("doc_no")]
 
-    # Dedup hanya untuk rows yang punya doc_no
     doc_nos = [r["doc_no"] for r in rows_with_key]
     existing: dict = {}
     if doc_nos:
         for row in (
             db.query(
+                MasterOsCedant.id,
                 MasterOsCedant.cedant_code,
                 MasterOsCedant.doc_no,
-                MasterOsCedant.dol,
-                MasterOsCedant.outstanding,
-                MasterOsCedant.currency,
+                MasterOsCedant.month,
+                MasterOsCedant.year,
             )
             .filter(MasterOsCedant.doc_no.in_(doc_nos))
+            .order_by(MasterOsCedant.id.desc())
             .all()
         ):
-            key = (row[0] or "", row[1] or "")
-            existing.setdefault(key, []).append({
-                "dol": row[2],
-                "outstanding": row[3],
-                "currency": row[4],
-            })
+            key = (row[1] or "", row[2] or "", row[3], row[4])
+            existing.setdefault(key, row[0])
 
     to_insert, to_update, skipped = [], [], empty_rows_skipped
     seen = set()
     for r in rows_with_key:
-        key = (r.get("cedant_code") or "", r.get("doc_no") or "")
+        key = (
+            r.get("cedant_code") or "",
+            r.get("doc_no") or "",
+            r.get("month"),
+            r.get("year"),
+        )
         if key in seen:
             skipped += 1
             continue
         seen.add(key)
 
-        existing_rows = existing.get(key)
-        if existing_rows:
-            missing_values = {
-                field: r.get(field)
-                for field in ("dol", "outstanding", "currency")
-                if r.get(field) is not None
-                and any(
-                    current.get(field) is None
-                    or (field == "currency" and not str(current.get(field)).strip())
-                    for current in existing_rows
-                )
-            }
-            if missing_values:
-                to_update.append({
-                    "cedant_code": r.get("cedant_code"),
-                    "doc_no": r.get("doc_no"),
-                    **{
-                        field: r.get(field)
-                        for field in ("dol", "outstanding", "currency")
-                    },
-                })
-            else:
-                skipped += 1
+        existing_id = existing.get(key)
+        if existing_id is not None:
+            to_update.append({
+                "id": existing_id,
+                "dol": r.get("dol"),
+                "outstanding": r.get("outstanding"),
+                "currency": r.get("currency"),
+                "file_name": r.get("file_name"),
+                "sheet_name": r.get("sheet_name"),
+            })
         else:
             to_insert.append(r)
 
-    # Rows tanpa doc_no selalu diinsert (tidak ada dedup)
     to_insert.extend(rows_without_key)
 
     BATCH = 1000
@@ -1458,11 +1509,9 @@ def _write_cedant_rows(db: Session, rows: list) -> dict:
         db.execute(
             text(
                 "UPDATE rekonsiliasi.master_os_cedant_web AS target SET "
-                "dol = COALESCE(target.dol, :dol), "
-                "outstanding = COALESCE(target.outstanding, :outstanding), "
-                "currency = COALESCE(NULLIF(BTRIM(target.currency), ''), :currency) "
-                "WHERE target.cedant_code IS NOT DISTINCT FROM :cedant_code "
-                "AND target.doc_no = :doc_no"
+                "dol = :dol, outstanding = :outstanding, currency = :currency, "
+                "file_name = :file_name, sheet_name = :sheet_name "
+                "WHERE target.id = :id"
             ),
             to_update[i:i + BATCH],
         )
@@ -2455,6 +2504,32 @@ def _cedant_result_table_name(short_name: str) -> str:
     return result_table_name(short_name)
 
 
+def _delete_cedant_result_period(
+    db: Session,
+    *,
+    table_name: str,
+    cedant_code: str,
+    month: int,
+    year: int,
+) -> int:
+    preparer = db.get_bind().dialect.identifier_preparer
+    quoted_table = preparer.quote(table_name)
+    result = db.execute(
+        text(
+            f"DELETE FROM hasil_rekonsiliasi.{quoted_table} "
+            "WHERE cedant_code = :cedant_code "
+            "AND reporting_month = :month "
+            "AND reporting_year = :year"
+        ),
+        {
+            "cedant_code": cedant_code,
+            "month": month,
+            "year": year,
+        },
+    )
+    return max(result.rowcount or 0, 0)
+
+
 def _write_cedant_result_rows(
     db: Session,
     *,
@@ -2466,7 +2541,8 @@ def _write_cedant_result_rows(
     sheet_name: str,
     mapping: dict[str, str],
     rows: list[tuple[dict, dict, int]],
-) -> tuple[str, int]:
+    replace_period: bool = False,
+) -> tuple[str, int, int]:
     short_name = db.execute(
         text(
             "SELECT cedant_short_name FROM rekonsiliasi.master_oscedant_code "
@@ -2506,7 +2582,7 @@ def _write_cedant_result_rows(
         mapped_columns[header] = field_name
 
     if not mapped_columns:
-        return table_name, 0
+        return table_name, 0, 0
 
     ensure_result_table(
         db,
@@ -2604,11 +2680,20 @@ def _write_cedant_result_rows(
             {name: values.get(column) for name, column in zip(value_names, insert_columns)}
         )
 
+    replaced = 0
+    if replace_period:
+        replaced = _delete_cedant_result_period(
+            db,
+            table_name=table_name,
+            cedant_code=cedant_code,
+            month=month,
+            year=year,
+        )
     if not parameters:
-        return table_name, 0
+        return table_name, 0, replaced
 
     result = db.execute(insert_sql, parameters)
-    return table_name, max(result.rowcount or 0, 0)
+    return table_name, max(result.rowcount or 0, 0), replaced
 
 
 def _build_workflow_infopack_row(
@@ -2756,11 +2841,27 @@ def _save_master_upload(
         )
 
     is_infopack = target_table == INFOPACK_TABLE
+    period_rows_replaced = 0
+    replace_period = False
+    period_locked = not is_infopack
+    if not is_infopack:
+        period_rows_replaced, replace_period = _replace_cedant_master_period(
+            db,
+            cedant_code=cedant_code,
+            month=month,
+            year=year,
+            batch_id=batch_id,
+        )
     stats = (
         _write_infopack_rows(db, list(rows_by_index.values()))
         if is_infopack
-        else _write_cedant_rows(db, list(rows_by_index.values()))
+        else _write_cedant_rows(
+            db,
+            list(rows_by_index.values()),
+            period_locked=period_locked,
+        )
     )
+    stats["period_rows_replaced"] = period_rows_replaced
     month_value = month
     year_value = year
     source_rows = raw_result.get("rows") or []
@@ -2827,6 +2928,7 @@ def _save_master_upload(
 
     result_table_name = None
     result_rows_appended = 0
+    result_rows_replaced = 0
     if not is_infopack:
         result_context = {
             "cedant_code": cedant_code,
@@ -2847,7 +2949,7 @@ def _save_master_upload(
             if not _has_cedant_result_values(normalized):
                 continue
             result_rows.append((source_data, normalized, int(excel_row)))
-        result_table_name, result_rows_appended = _write_cedant_result_rows(
+        result_table_name, result_rows_appended, result_rows_replaced = _write_cedant_result_rows(
             db,
             cedant_code=cedant_code,
             table_id=table_id,
@@ -2857,9 +2959,11 @@ def _save_master_upload(
             sheet_name=sheet_name,
             mapping=effective_col_map,
             rows=result_rows,
+            replace_period=replace_period,
         )
         stats["result_table"] = result_table_name
         stats["result_rows_appended"] = result_rows_appended
+        stats["result_rows_replaced"] = result_rows_replaced
 
     job.sheet_name = sheet_name or job.sheet_name
     job.status = "done"
@@ -3553,6 +3657,9 @@ def confirm_upload_table_mapping(
                     continue
                 normalized_rows.append((raw, normalized))
 
+        period_rows_replaced = 0
+        result_rows_replaced = 0
+        replace_period = False
         if table == INFOPACK_TABLE:
             rows_by_index = {
                 int(row["row_index"]): row for _, row in normalized_rows
@@ -3560,7 +3667,18 @@ def confirm_upload_table_mapping(
             _validate_infopack_rows(rows_by_index, row_numbers_are_excel=True)
             stats = _write_infopack_rows(db, list(rows_by_index.values()))
         else:
-            stats = _write_cedant_rows(db, [row for _, row in normalized_rows])
+            period_rows_replaced, replace_period = _replace_cedant_master_period(
+                db,
+                cedant_code=context["cedant_code"],
+                month=int(context["reporting_month"]),
+                year=int(context["reporting_year"]),
+                batch_id=context["batch_id"],
+            )
+            stats = _write_cedant_rows(
+                db,
+                [row for _, row in normalized_rows],
+                period_locked=True,
+            )
             stats["skipped"] += len(raw_rows) - len(normalized_rows)
             result_rows = []
             for raw, normalized in normalized_rows:
@@ -3579,7 +3697,7 @@ def confirm_upload_table_mapping(
                         detail=f"Nomor baris Excel tidak tersedia pada raw row {raw.id}.",
                     )
                 result_rows.append((source_data, normalized, int(excel_row)))
-            result_table_name, result_rows_appended = _write_cedant_result_rows(
+            result_table_name, result_rows_appended, result_rows_replaced = _write_cedant_result_rows(
                 db,
                 cedant_code=context["cedant_code"],
                 table_id=table_id,
@@ -3589,6 +3707,7 @@ def confirm_upload_table_mapping(
                 sheet_name=context["sheet_name"],
                 mapping=mapping,
                 rows=result_rows,
+                replace_period=replace_period,
             )
 
         for raw, normalized in normalized_rows:
@@ -3654,9 +3773,12 @@ def confirm_upload_table_mapping(
             "target_table": table,
             "rows_appended": stats["inserted"],
             "rows_updated": stats["updated"],
+            "rows_replaced": period_rows_replaced,
+            "period_replaced": bool(period_rows_replaced or result_rows_replaced),
             "rows_skipped": stats["skipped"],
             "result_table": result_table_name if table != INFOPACK_TABLE else None,
             "result_rows_appended": result_rows_appended if table != INFOPACK_TABLE else 0,
+            "result_rows_replaced": result_rows_replaced,
         }
     except HTTPException as exc:
         db.rollback()
@@ -3909,17 +4031,34 @@ async def upload_to_master(
             "rows_appended": stats["inserted"],
             "rows_skipped": stats["skipped"],
             "rows_updated": stats["updated"],
+            "rows_replaced": stats.get("period_rows_replaced", 0),
+            "period_replaced": bool(
+                stats.get("period_rows_replaced", 0)
+                or stats.get("result_rows_replaced", 0)
+            ),
             "result_table": stats.get("result_table"),
             "result_rows_appended": stats.get("result_rows_appended", 0),
+            "result_rows_replaced": stats.get("result_rows_replaced", 0),
             "total_columns": len(scanned_headers),
             "scanned_headers": scanned_headers,
             "column_mapping": effective_col_map,
             "unmapped_headers": unmapped_headers,
             "message": (
-                f"Upload berhasil. {stats['inserted']} baris ditambahkan, "
-                f"{stats['updated']} baris dilengkapi, {stats['skipped']} dilewati. "
-                f"({len(scanned_headers)} kolom header disimpan)."
-            ),
+                (
+                    f"Periode lama diganti: {stats.get('period_rows_replaced', 0)} baris "
+                    f"Master dan {stats.get('result_rows_replaced', 0)} baris hasil lama "
+                    f"dihapus; {stats['inserted']} baris Master dan "
+                    f"{stats.get('result_rows_appended', 0)} baris hasil baru disimpan. "
+                )
+                if (
+                    stats.get("period_rows_replaced", 0)
+                    or stats.get("result_rows_replaced", 0)
+                )
+                else (
+                    f"Upload berhasil. {stats['inserted']} baris ditambahkan, "
+                    f"{stats['updated']} baris diperbarui, {stats['skipped']} dilewati. "
+                )
+            ) + f"({len(scanned_headers)} kolom header disimpan).",
         }
     except HTTPException as exc:
         db.rollback()

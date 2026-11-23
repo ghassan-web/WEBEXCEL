@@ -24,7 +24,7 @@ export default function Card({
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-2.5 flex-wrap">
               {title && (
-                <h3 className="text-[var(--text-body-lg)] font-semibold text-[var(--color-ink)] tracking-tight truncate">
+                <h3 className="text-[15px] font-semibold text-[var(--color-ink)] tracking-tight truncate">
                   {title}
                 </h3>
               )}
@@ -35,7 +35,7 @@ export default function Card({
               )}
             </div>
             {description && (
-              <p className="text-[var(--text-caption)] text-[var(--color-ink-muted)] leading-relaxed">
+              <p className="text-xs text-[var(--color-ink-muted)] leading-relaxed">
                 {description}
               </p>
             )}

@@ -18,7 +18,7 @@ export default function SummaryCards({ summary, totalA, totalB }) {
           key={c.label}
           className={`rounded-2xl border ${c.border} ${c.bg} px-4 py-4 flex flex-col items-center gap-1.5 shadow-card`}
         >
-          <span className={`text-2xl font-bold tracking-tight ${c.text}`}>
+          <span className={`text-2xl font-bold font-mono tabular-nums tracking-tight ${c.text}`}>
             {c.value.toLocaleString("id-ID")}
           </span>
           <span className="text-xs text-gray-500 text-center leading-tight font-medium">{c.label}</span>

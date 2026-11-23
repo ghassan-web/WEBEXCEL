@@ -65,7 +65,7 @@ export default function Modal({
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div
-        className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity"
+        className="fixed inset-0 bg-slate-950/60 backdrop-blur-[2px] transition-opacity"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -82,12 +82,12 @@ export default function Modal({
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-line)] shrink-0">
           <div className="flex flex-col gap-0.5 pr-4">
             {title && (
-              <h3 id="modal-dialog-title" className="text-[var(--text-lead)] font-semibold text-[var(--color-ink)] tracking-tight">
+              <h3 id="modal-dialog-title" className="text-base font-semibold text-[var(--color-ink)] tracking-tight">
                 {title}
               </h3>
             )}
             {description && (
-              <p id="modal-dialog-description" className="text-[var(--text-caption)] text-[var(--color-ink-muted)]">
+              <p id="modal-dialog-description" className="text-xs text-[var(--color-ink-muted)]">
                 {description}
               </p>
             )}
@@ -100,7 +100,7 @@ export default function Modal({
           />
         </div>
 
-        <div className="p-6 overflow-y-auto modal-scroll flex-1 text-[var(--text-body)] text-[var(--color-ink-body)]">
+        <div className="p-6 overflow-y-auto modal-scroll flex-1 text-sm text-[var(--color-ink-body)]">
           {children}
         </div>
 

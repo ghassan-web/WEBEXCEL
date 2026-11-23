@@ -3,8 +3,11 @@ FastAPI entry point – Excel Comparison App
 Run: uvicorn app.main:app --reload --port 8000
 """
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from .models.database import engine
 from .routers import compare_router, master_router, oscln_router
 
 logging.basicConfig(
@@ -46,5 +49,12 @@ def root():
 
 
 @app.get("/health", tags=["health"])
-def health():
-    return {"status": "healthy"}
+def health(response: Response):
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1")).scalar_one()
+    except SQLAlchemyError:
+        logger.exception("Database health check failed")
+        response.status_code = 503
+        return {"status": "unhealthy", "database": "disconnected"}
+    return {"status": "healthy", "database": "connected"}

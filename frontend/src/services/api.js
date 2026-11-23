@@ -7,7 +7,10 @@
  *   header (or as a query param for window.location.href downloads).
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE_URL =
+  import.meta.env.VITE_API_BASE_RU_CLAIMS_URL?.trim() ||
+  import.meta.env.VITE_API_URL?.trim() ||
+  "http://localhost:8000";
 
 // ─── Session ID helpers ───────────────────────────────────────────────────────
 
@@ -161,6 +164,16 @@ export async function getColumnMappings() {
   return handleResponse(res);
 }
 
+/** POST /api/master/mappings — create a new mapping version. */
+export async function addColumnMappingVersion(payload) {
+  const res = await fetch(`${BASE_URL}/api/master/mappings`, {
+    method: "POST",
+    headers: sessionHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res);
+}
+
 /** POST /api/master/inspect — scan sheets, headers, samples, and auto-mapping */
 export async function inspectMasterFile(formData) {
   const res = await fetch(`${BASE_URL}/api/master/inspect`, {
@@ -204,11 +217,17 @@ export async function getScannedHeaders(tipeData, cedant) {
 }
 
 /** GET /api/master/data */
-export async function getMasterData(tipeData, { cedant, search, skip = 0, limit = 50 } = {}) {
+export async function getMasterData(
+  tipeData,
+  { cedant, search, filters = {}, skip = 0, limit = 50 } = {},
+) {
   const params = new URLSearchParams({ skip, limit });
   if (tipeData) params.append("tipe_data", tipeData);
   if (cedant)   params.append("cedant", cedant);
   if (search)   params.append("search", search);
+  for (const [field, value] of Object.entries(filters)) {
+    if (value) params.append(field, value);
+  }
   const res = await fetch(
     `${BASE_URL}/api/master/data?${params}`,
     { headers: sessionHeaders() },
@@ -274,7 +293,8 @@ export async function deleteLibraryEntries(jobIds) {
 }
 
 /**
- * GET /api/master/export?tipe_data=&cedant= → triggers CSV download
+ * GET /api/master/export  (browser nav → query param)
+ * Downloads as .xlsx
  */
 export function exportMasterCsv(tipeData, cedant) {
   const params = new URLSearchParams({ session_id: getSessionId() });

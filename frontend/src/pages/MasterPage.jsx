@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { getMasterData, getColumnMappings, exportMasterCsv } from "../services/api";
-import { Button, Badge } from "../components/ui";
+import { PageHeader, Button, Badge } from "../components/ui";
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
@@ -10,15 +10,40 @@ import {
   XMarkIcon,
   TableCellsIcon,
   Squares2X2Icon,
+  FunnelIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
 } from "@heroicons/react/24/outline";
 
 const PAGE_SIZE = 50;
+
+const CORE_FILTERS = {
+  os: [
+    { key: "loss_ref", label: "Loss Ref", placeholder: "Cari loss ref..." },
+    { key: "cedant_code", label: "Cedant Code", placeholder: "Kode cedant..." },
+    { key: "cedant_name", label: "Cedant Name", placeholder: "Nama cedant..." },
+    { key: "dol", label: "Date of Loss", placeholder: "YYYY-MM-DD atau tahun..." },
+    { key: "currency", label: "Currency", placeholder: "IDR / USD..." },
+    { key: "outstanding", label: "Outstanding", placeholder: "Cari outstanding..." },
+  ],
+  infopack: [
+    { key: "cedant_code", label: "Cedant Code", placeholder: "Kode cedant..." },
+    { key: "sheet_name", label: "Sheet", placeholder: "Nama sheet..." },
+    { key: "class_code", label: "Class Code", placeholder: "Cari class code..." },
+    { key: "title", label: "Title / Uraian", placeholder: "Cari title..." },
+    { key: "value", label: "Value", placeholder: "Cari value..." },
+    { key: "period", label: "Periode", placeholder: "Bulan/Tahun..." },
+  ],
+};
 
 export default function MasterPage() {
   const [data, setData] = useState(null); // { total, scanned_headers, rows }
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [filters, setFilters] = useState({});
+  const [filterDraft, setFilterDraft] = useState({});
+  const [filterOpen, setFilterOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("os"); // 'os' | 'infopack'
   const [selectedCedant, setSelectedCedant] = useState("");
   const [mappingProfiles, setMappingProfiles] = useState([]);
@@ -37,6 +62,7 @@ export default function MasterPage() {
       const res = await getMasterData(tipeData, {
         cedant: selectedCedant || undefined,
         search: search || undefined,
+        filters,
         skip: page * PAGE_SIZE,
         limit: PAGE_SIZE,
       });
@@ -46,7 +72,7 @@ export default function MasterPage() {
     } finally {
       setLoading(false);
     }
-  }, [tipeData, selectedCedant, search, page]);
+  }, [tipeData, selectedCedant, search, filters, page]);
 
   useEffect(() => {
     load();
@@ -69,7 +95,7 @@ export default function MasterPage() {
 
   useEffect(() => {
     setPage(0);
-  }, [activeTab, search, selectedCedant]);
+  }, [activeTab, search, selectedCedant, filters]);
 
   const totalRows = data?.total ?? 0;
   const totalPages = Math.ceil(totalRows / PAGE_SIZE);
@@ -93,6 +119,8 @@ export default function MasterPage() {
   const selectedCedantName = cedantOptions.find(
     (option) => option.code === selectedCedant,
   )?.name;
+  const activeCoreFilters = CORE_FILTERS[activeTab];
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
   const displayValue = (value) => {
     if (value === null || value === undefined) return "";
@@ -107,6 +135,8 @@ export default function MasterPage() {
     if (activeTab === "infopack") {
       return {
         cedant: displayValue(r.cedant),
+        cedantCode: displayValue(r.cedant || d.cedant_code),
+        cedantName: displayValue(r.cedant_name || d.cedant_name),
         sheet,
         classCode: displayValue(d.class_code),
         title: displayValue(d.title || r.primary_key_value),
@@ -117,7 +147,8 @@ export default function MasterPage() {
 
     return {
       cedant: displayValue(r.cedant),
-      sheet,
+      cedantCode: displayValue(r.cedant || d.cedant_code),
+      cedantName: displayValue(r.cedant_name || d.cedant_name),
       lossRef: displayValue(r.primary_key_value || d.doc_no),
       outstanding: displayValue(d.outstanding),
       dol: displayValue(d.dol),
@@ -128,6 +159,23 @@ export default function MasterPage() {
 
   const handleSearch = () => setSearch(searchInput.trim());
 
+  const handleApplyFilters = () => {
+    const appliedFilters = Object.fromEntries(
+      activeCoreFilters
+        .map(({ key }) => [key, String(filterDraft[key] || "").trim()])
+        .filter(([, value]) => value),
+    );
+    setPage(0);
+    setFilters(appliedFilters);
+    setFilterOpen(false);
+  };
+
+  const handleClearFilters = () => {
+    setPage(0);
+    setFilters({});
+    setFilterDraft({});
+  };
+
   const handleExport = () => {
     setExporting(true);
     exportMasterCsv(tipeData, selectedCedant || undefined);
@@ -135,43 +183,35 @@ export default function MasterPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans">
+    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans saas-page-enter">
       {/* Top Heading & Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-brand)]">
-            Consolidated Output
-          </span>
-          <h1 className="text-[var(--text-title)] font-bold text-[var(--color-ink)] tracking-tight mt-0.5">
-            Master {activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}
-          </h1>
-          <p className="text-xs text-[var(--color-ink-muted)] mt-0.5 max-w-2xl">
-            Pilih cedant untuk melihat data intinya atau seluruh kolom asli hasil scan file Excel.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={ArrowPathIcon}
-            loading={loading}
-            onClick={load}
-          >
-            Refresh
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            icon={ArrowDownTrayIcon}
-            loading={exporting}
-            disabled={totalRows === 0}
-            onClick={handleExport}
-          >
-            Export Excel
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={`Master ${activeTab === "os" ? "OS Claim Cedant" : "InfoPack"}`}
+        description="Pilih cedant untuk melihat data intinya atau seluruh kolom asli hasil scan file Excel."
+        actions={
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ArrowPathIcon}
+              loading={loading}
+              onClick={load}
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={ArrowDownTrayIcon}
+              loading={exporting}
+              disabled={totalRows === 0}
+              onClick={handleExport}
+            >
+              Export Excel
+            </Button>
+          </div>
+        }
+      />
 
       {/* Dataset Tabs & Column View Mode Switcher */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -187,6 +227,9 @@ export default function MasterPage() {
               onClick={() => {
                 setActiveTab(key);
                 setSelectedCedant("");
+                setFilters({});
+                setFilterDraft({});
+                setFilterOpen(false);
               }}
               className={`px-4 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold transition-all cursor-pointer ${
                 activeTab === key
@@ -273,7 +316,7 @@ export default function MasterPage() {
       )}
 
       {/* Main Data Card */}
-      <div className="bg-[var(--color-surface)] rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)] overflow-hidden">
+      <div className="relative bg-[var(--color-surface)] rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)]">
         {/* Card Toolbar */}
         <div className="px-5 py-3.5 border-b border-[var(--color-line)] flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -296,7 +339,7 @@ export default function MasterPage() {
           </div>
 
           {/* Search Input */}
-          <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-ink-muted)]" />
               <input
@@ -323,6 +366,81 @@ export default function MasterPage() {
             <Button variant="secondary" size="xs" onClick={handleSearch}>
               Search
             </Button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (!filterOpen) setFilterDraft(filters);
+                setFilterOpen((open) => !open);
+              }}
+              aria-expanded={filterOpen}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-control)] border text-xs font-semibold transition-colors ${
+                filterOpen || activeFilterCount
+                  ? "border-[var(--color-brand-line)] bg-[var(--color-brand-soft)] text-[var(--color-brand)]"
+                  : "border-[var(--color-line)] bg-[var(--color-surface)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              <FunnelIcon className="h-3.5 w-3.5" />
+              Filter
+              {activeFilterCount > 0 && (
+                <span className="rounded-full bg-[var(--color-brand)] px-1.5 text-[10px] text-white">
+                  {activeFilterCount}
+                </span>
+              )}
+              {filterOpen ? (
+                <ChevronUpIcon className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDownIcon className="h-3.5 w-3.5" />
+              )}
+            </button>
+
+            {filterOpen && (
+              <div className="absolute right-0 top-full z-30 mt-2 w-[min(27rem,calc(100vw-18rem))] min-w-[18rem] rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-4 shadow-xl">
+                <div className="mb-3 text-sm font-bold text-[var(--color-ink)]">
+                  Filter per Kolom
+                </div>
+                <div className="grid grid-cols-1 gap-x-3 gap-y-3 sm:grid-cols-2">
+                  {activeCoreFilters.map((field) => (
+                    <label key={field.key} className="min-w-0">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-[var(--color-ink-muted)]">
+                        {field.label}
+                      </span>
+                      <input
+                        type="text"
+                        value={filterDraft[field.key] || ""}
+                        onChange={(event) =>
+                          setFilterDraft((current) => ({
+                            ...current,
+                            [field.key]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) =>
+                          event.key === "Enter" && handleApplyFilters()
+                        }
+                        placeholder={field.placeholder}
+                        className="w-full rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:outline-none focus:border-[var(--color-brand)]"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4 flex items-center justify-between border-t border-[var(--color-line)] pt-3">
+                  <button
+                    type="button"
+                    onClick={handleClearFilters}
+                    className="text-xs font-semibold text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                  >
+                    Reset filter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleApplyFilters}
+                    className="rounded-[var(--radius-control)] bg-[var(--color-brand)] px-3 py-2 text-xs font-bold text-white hover:opacity-90"
+                  >
+                    Terapkan Filter
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -333,18 +451,19 @@ export default function MasterPage() {
             <table className="min-w-full text-xs sm:text-[13px] border-collapse">
               <thead>
                 <tr className="border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] text-[11px] uppercase font-bold tracking-wider">
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Code</th>
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Sheet</th>
                   {activeTab === "os" ? (
                     <>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Loss Ref</th>
-                      <th className="px-4 py-3 text-right whitespace-nowrap">Outstanding</th>
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Currency</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Code</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Name</th>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Date of Loss</th>
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Description / Insured</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Currency</th>
+                      <th className="px-4 py-3 text-right whitespace-nowrap">Outstanding</th>
                     </>
                   ) : (
                     <>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Code</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Sheet</th>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Class Code</th>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Title / Uraian</th>
                       <th className="px-4 py-3 text-right whitespace-nowrap">Value</th>
@@ -357,7 +476,7 @@ export default function MasterPage() {
                 {loading && (
                   <tr>
                     <td
-                      colSpan={activeTab === "os" ? 7 : 6}
+                      colSpan={6}
                       className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse"
                     >
                       Memuat data Master...
@@ -367,7 +486,7 @@ export default function MasterPage() {
                 {!loading && rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={activeTab === "os" ? 7 : 6}
+                      colSpan={6}
                       className="text-center py-12 text-[var(--color-ink-muted)]"
                     >
                       Belum ada data yang sesuai. Silakan unggah file Excel melalui halaman Upload Data.
@@ -414,14 +533,22 @@ export default function MasterPage() {
                         key={r.id}
                         className="hover:bg-[var(--color-surface-sunken)]/60 transition-colors"
                       >
-                        <td className="px-4 py-2.5 font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
-                          {d.cedant}
-                        </td>
-                        <td className="px-4 py-2.5 text-[var(--color-brand)] font-medium whitespace-nowrap">
-                          {d.sheet}
-                        </td>
                         <td className="px-4 py-2.5 font-mono text-[var(--color-ink)] whitespace-nowrap">
                           {d.lossRef}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                          {d.cedantCode}
+                        </td>
+                        <td className="px-4 py-2.5 text-[var(--color-ink-body)] max-w-[280px]">
+                          <span className="truncate block" title={d.cedantName}>
+                            {d.cedantName || "—"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-[var(--color-ink-body)] whitespace-nowrap">
+                          {d.dol}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-[var(--color-ink-body)] whitespace-nowrap">
+                          {d.currency}
                         </td>
                         <td
                           className={`px-4 py-2.5 text-right font-mono font-semibold whitespace-nowrap ${
@@ -439,17 +566,6 @@ export default function MasterPage() {
                                   maximumFractionDigits: 2,
                                 })
                             : ""}
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-[var(--color-ink-body)] whitespace-nowrap">
-                          {d.currency}
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-[var(--color-ink-body)] whitespace-nowrap">
-                          {d.dol}
-                        </td>
-                        <td className="px-4 py-2.5 text-[var(--color-ink-body)] max-w-[260px]">
-                          <span className="truncate block" title={d.ket}>
-                            {d.ket || "—"}
-                          </span>
                         </td>
                       </tr>
                     );

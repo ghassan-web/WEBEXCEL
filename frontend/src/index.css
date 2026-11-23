@@ -1,12 +1,13 @@
-/* ── Google Fonts (Plus Jakarta Sans & Inter — Indonesia Re UI Standard) ── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ── Explicit :root Light Mode Design Tokens (from indonesiare-frontend) ── */
 :root {
+  --font-sans:             "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:             "Inter", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-code:             "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
   --color-canvas:          #F5F6F8;
   --color-surface:         #FFFFFF;
   --color-surface-sunken:  #F8FAFC;
@@ -124,14 +125,28 @@
 }
 
 /* ── Base application viewport & scroll ownership ── */
-html, body, #root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  background-color: var(--color-canvas);
-  color: var(--color-ink);
-  font-family: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.55;
+    color: var(--color-ink-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 }
 
 .app-main-scroll {
@@ -224,8 +239,8 @@ thead th { backdrop-filter: blur(4px); }
     @apply flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-control)] text-[13px] font-medium
            transition-all duration-150 cursor-pointer select-none w-full text-left;
   }
-  .nav-item-idle   { @apply text-slate-300/80 hover:bg-white/[0.05] hover:text-white; }
-  .nav-item-active { @apply bg-white/[0.09] text-white border border-white/[0.14] shadow-xs font-semibold; }
+  .nav-item-idle   { @apply text-slate-300/80 hover:bg-white/[0.08] hover:text-white; }
+  .nav-item-active { @apply bg-white/15 text-white font-semibold; }
 
   .page-header {
     @apply bg-[var(--color-surface)] border-b border-[var(--color-line)] px-6 py-3.5 flex items-center gap-3 sticky top-0 z-10;
@@ -248,4 +263,32 @@ thead th { backdrop-filter: blur(4px); }
 
   .th { @apply px-4 py-3 text-left text-xs font-semibold text-[var(--color-ink-muted)] uppercase tracking-wide whitespace-nowrap; }
   .td { @apply px-4 py-3 text-sm text-[var(--color-ink-body)]; }
+}
+
+@keyframes saas-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.saas-page-enter {
+  animation: saas-fade-up 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Typography utilities synced with example/src/styles/theme.css (instant Vite HMR) ── */
+.font-sans {
+  font-family: var(--font-sans);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.font-code {
+  font-family: var(--font-code);
 }

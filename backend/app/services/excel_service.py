@@ -6,10 +6,13 @@ and returns structured results ready for storage and download.
 import json
 import math
 import os
+import re
 import pandas as pd
 import numpy as np
 from io import BytesIO
+from itertools import chain, islice
 from typing import Optional, Tuple
+from zipfile import BadZipFile, ZipFile
 import msoffcrypto
 from msoffcrypto.exceptions import InvalidKeyError
 import openpyxl
@@ -147,18 +150,22 @@ def _get_engine(file_bytes: bytes) -> Optional[str]:
 
     if header[:2] == ZIP_MAGIC:
         # ZIP-based (.xlsx / .xlsm / .xlsb)
-        # Try pyxlsb first (it handles .xlsb which is also ZIP-based in newer Excel)
         try:
-            pd.ExcelFile(BytesIO(file_bytes), engine="pyxlsb")
-            return "pyxlsb"
-        except Exception:
+            with ZipFile(BytesIO(file_bytes)) as workbook:
+                names = set(workbook.namelist())
+            if "xl/workbook.bin" in names:
+                return "pyxlsb"
+            if "xl/workbook.xml" in names:
+                return "openpyxl"
+        except BadZipFile:
             pass
-        # Fall back to openpyxl for standard .xlsx / .xlsm
-        try:
-            pd.ExcelFile(BytesIO(file_bytes), engine="openpyxl")
-            return "openpyxl"
-        except Exception:
-            pass
+        for engine in ("pyxlsb", "openpyxl"):
+            try:
+                workbook = pd.ExcelFile(BytesIO(file_bytes), engine=engine)
+                workbook.close()
+                return engine
+            except Exception:
+                pass
         return None
 
     # Unknown magic — try all engines in order
@@ -192,6 +199,89 @@ def _open_excel_file(file_bytes: bytes) -> Tuple[pd.ExcelFile, Optional[str]]:
             "Pastikan file adalah .xlsx, .xls, atau .xlsb yang valid dan tidak corrupt. "
             f"Detail teknis: {exc}"
         ) from exc
+
+
+def _excel_header_names(values) -> list[str]:
+    raw_names = [
+        f"Unnamed: {index}" if pd.isna(value) or str(value).strip() == "" else str(value)
+        for index, value in enumerate(values)
+    ]
+    original_names = set(raw_names)
+    used_names = set()
+    next_suffix: dict[str, int] = {}
+    headers = []
+    for raw_name in raw_names:
+        name = raw_name
+        if name in used_names:
+            suffix = next_suffix.get(raw_name, 1)
+            name = f"{raw_name}.{suffix}"
+            while name in used_names or name in original_names:
+                suffix += 1
+                name = f"{raw_name}.{suffix}"
+            next_suffix[raw_name] = suffix + 1
+        else:
+            next_suffix.setdefault(raw_name, 1)
+        used_names.add(name)
+        headers.append(" ".join(name.split()))
+    return headers
+
+
+def _select_header_row(raw: pd.DataFrame, max_scan: int = 40) -> int:
+    raw = raw.head(max_scan).fillna("")
+    best_row = 0
+    best_score = -1
+    num_pattern = re.compile(r"^\s*-?\d[\d,.\s]*$")
+    date_pattern = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}")
+    scores: dict[int, float] = {}
+
+    for index, row in enumerate(raw.itertuples(index=False, name=None)):
+        values = [
+            str(value).strip()
+            for value in row
+            if str(value).strip() not in ("", "nan", "None")
+        ]
+        if not values:
+            continue
+        distinct = len(set(values))
+        if (distinct <= 1 and len(values) >= 3) or (
+            len(values) == 1 and len(values[0]) > 40
+        ):
+            continue
+
+        score = len(values) + distinct
+        score += sum(1 for value in values if len(value) <= 40)
+        if (
+            all(
+                not num_pattern.match(value) and not date_pattern.search(value)
+                for value in values
+            )
+            and len(values) >= 3
+        ):
+            score += len(values) * 2
+        if len(row) > 0 and len(values) / len(row) < 0.2:
+            score = max(0, score - 5)
+
+        scores[index] = score
+        if score > best_score:
+            best_score = score
+            best_row = index
+            if score >= len(values) * 3 and distinct >= 4:
+                break
+
+    def unnamed_ratio(header_row: int) -> float:
+        if header_row >= len(raw):
+            return 1.0
+        names = _excel_header_names(raw.iloc[header_row].tolist())
+        unnamed = sum(name.startswith("Unnamed:") for name in names)
+        return unnamed / len(names) if names else 1.0
+
+    if unnamed_ratio(best_row) > 0.5:
+        ranked_rows = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        for row_index, _ in ranked_rows[1:4]:
+            if unnamed_ratio(row_index) <= 0.5:
+                best_row = row_index
+                break
+    return int(best_row)
 
 
 def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 40) -> int:
@@ -244,31 +334,42 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 40) -> 
     scores: dict[int, float] = {}
 
     for i, row in raw.iterrows():
-        values = [str(v).strip() for v in row if str(v).strip() != ""]
+        values = [str(v).strip() for v in row if str(v).strip() not in ("", "nan", "None")]
         if not values:
             continue
 
-        values = [value for value in values if value not in ("nan", "None")]
         distinct = len(set(values))
+
+        # Hard skip: single merged-cell title spanning most of the row
         if distinct <= 1 and len(values) >= 3:
             continue
+
+        # Hard skip: row looks like a single long sentence / title
         if len(values) == 1 and len(values[0]) > 40:
             continue
 
-        short = sum(1 for value in values if len(value) <= 40)
-        numeric_cells = sum(1 for value in values if _num_pat.fullmatch(value))
-        date_cells = sum(1 for value in values if _date_pat.search(value))
-        keyword_hits = sum(1 for value in values if header_keywords.search(value))
+        # Score = number of non-empty distinct-ish cells
+        score = len(values)
 
-        if values and numeric_cells / len(values) > 0.6:
-            score = 0
-        else:
-            score = len(values) + distinct + short
-            if len(values) >= 3 and numeric_cells == 0 and date_cells == 0:
-                score += len(values) * 2
-            score += keyword_hits * 3
-            score -= numeric_cells * 2 + date_cells
-        if len(row) and len(values) / len(row) < 0.2:
+        # Boost: row has many distinct values (good column header signal)
+        score += distinct
+
+        # Boost: most values are short (≤ 40 chars) — typical for headers
+        short = sum(1 for v in values if len(v) <= 40)
+        score += short
+
+        # Strong boost: all values look like plain text labels (no numbers/dates)
+        # This strongly distinguishes header rows from data rows
+        all_text = all(
+            not _num_pat.match(v) and not _date_pat.search(v)
+            for v in values
+        )
+        if all_text and len(values) >= 3:
+            score += len(values) * 2  # heavy boost — very likely a header row
+
+        # Penalise: row has very few non-empty cells relative to total columns
+        total_cols = len(row)
+        if total_cols > 0 and len(values) / total_cols < 0.2:
             score = max(0, score - 5)
 
         scores[int(i)] = score
@@ -305,34 +406,54 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 40) -> 
     return int(best_row)
 
 
-def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
+def _read_excel_with_header_row(
+    file_bytes: bytes,
+    sheet_name: Optional[str] = None,
+    excel_file: Optional[pd.ExcelFile] = None,
+) -> Tuple[pd.DataFrame, str, int]:
     """
     Read an Excel file into a DataFrame.
     Supports .xlsx, .xls, and .xlsb (via pyxlsb engine).
     If sheet_name is None, the first sheet is used.
     """
-    xls, engine = _open_excel_file(file_bytes)
-    target = sheet_name if sheet_name and sheet_name in xls.sheet_names else xls.sheet_names[0]
+    owns_workbook = excel_file is None
+    if owns_workbook:
+        workbook, _ = _open_excel_file(file_bytes)
+    else:
+        workbook = excel_file
+    target = (
+        sheet_name
+        if sheet_name and sheet_name in workbook.sheet_names
+        else workbook.sheet_names[0]
+    )
+    try:
+        raw = pd.read_excel(workbook, sheet_name=target, header=None, dtype=str)
+        if raw.empty:
+            return pd.DataFrame(), target, 0
+        header_row = _select_header_row(raw)
+        df = raw.iloc[header_row + 1 :].copy()
+        df.columns = _excel_header_names(raw.iloc[header_row].tolist())
+        df.index = df.index - header_row - 1
+        df.dropna(how="all", inplace=True)
+        df.fillna("", inplace=True)
+        return df, target, header_row
+    finally:
+        if owns_workbook:
+            workbook.close()
 
-    # Auto-detect header row
-    header_row = _find_header_row(file_bytes, target)
 
-    kwargs = {"engine": engine} if engine else {}
-    df = pd.read_excel(BytesIO(file_bytes), sheet_name=target,
-                       header=header_row, dtype=str, **kwargs)
-    df.columns = [
-        " ".join(str(c).strip().replace("\xa0", " ").replace("\u200b", "").split())
-        for c in df.columns
-    ]
-    df.dropna(how="all", inplace=True)
-    df.fillna("", inplace=True)
+def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd.DataFrame, str]:
+    df, target, _ = _read_excel_with_header_row(file_bytes, sheet_name)
     return df, target
 
 
 def get_sheet_names(file_bytes: bytes) -> list[str]:
     """Return all sheet names of an Excel workbook. Supports .xlsx, .xls, .xlsb."""
     xls, _ = _open_excel_file(file_bytes)
-    return xls.sheet_names
+    try:
+        return list(xls.sheet_names)
+    finally:
+        xls.close()
 
 
 # ─────────────────────────────────────────────
@@ -697,8 +818,26 @@ def ingest_excel(
     primary_key_col: str,
     sheet_name: Optional[str] = None,
 ) -> dict:
-    """Read one sheet and return its deduplicated rows for Master append."""
+    """
+    Read one Excel file and return its rows ready for Master append.
+
+    primary_key_col supports composite format: "DOL|COB"
+    — both column names are looked up (case-insensitive), their values are
+      joined with '__' and stored as the primary_key_value.
+
+    Jika primary_key_col kosong (""), kolom pertama dari file dipakai sebagai
+    primary key (auto-detect mode).
+
+    Returns:
+    {
+        "sheet": str,
+        "total_rows": int,
+        "rows": [{"pk": str, "data": {col: val, ...}}, ...]
+    }
+    """
     df, actual_sheet = _read_excel(file_bytes, sheet_name)
+
+    # ── Auto-detect: gunakan kolom pertama jika pk kosong ───────────────
     if not primary_key_col or not primary_key_col.strip():
         if df.empty or not len(df.columns):
             raise ValueError("File tidak memiliki kolom ? tidak bisa auto-detect primary key.")
@@ -721,19 +860,29 @@ def ingest_excel(
         str(column) for column in df.columns
         if column != _VIRTUAL_PK and not str(column).strip().lower().startswith("unnamed")
     ]
+
+    column_positions = {
+        column: index
+        for index, column in enumerate(df.columns)
+        if column in clean_columns
+    }
+    pk_position = list(df.columns).index(pk_column)
     rows = []
-    for _, row in df.iterrows():
-        row_data = _row_to_dict(row)
+    for row in df.itertuples(index=False, name=None):
+        filtered_dict = {
+            column: _sanitize(row[position])
+            for column, position in column_positions.items()
+        }
         rows.append({
-            "pk": str(row[pk_column]),
-            "data": {column: row_data.get(column, "") for column in clean_columns},
+            "pk":   str(row[pk_position]),
+            "data": filtered_dict,
         })
 
     return {
         "sheet": actual_sheet,
         "columns": clean_columns,
         "total_rows": len(df),
-        "rows": rows,
+        "rows":       rows,
     }
 
 def ingest_excel_raw(
@@ -747,15 +896,71 @@ def ingest_excel_raw(
         if decrypt_password
         else file_bytes
     )
-    df, actual_sheet = _read_excel(source_bytes, sheet_name)
-    header_row = _find_header_row(source_bytes, actual_sheet)
+    if _get_engine(source_bytes) == "openpyxl":
+        workbook = openpyxl.load_workbook(
+            BytesIO(source_bytes),
+            read_only=True,
+            data_only=True,
+        )
+        try:
+            target = (
+                sheet_name
+                if sheet_name and sheet_name in workbook.sheetnames
+                else workbook.sheetnames[0]
+            )
+            row_iterator = workbook[target].iter_rows(values_only=True)
+            preview_rows = list(islice(row_iterator, 40))
+            if not preview_rows:
+                return {
+                    "sheet": target,
+                    "columns": [],
+                    "total_rows": 0,
+                    "rows": [],
+                }
+            header_row = _select_header_row(pd.DataFrame(preview_rows))
+            headers = _excel_header_names(preview_rows[header_row])
+            rows = []
+
+            def row_to_string_values(values) -> dict[str, str]:
+                row_data = {}
+                for index, header in enumerate(headers):
+                    value = _sanitize(values[index] if index < len(values) else None)
+                    row_data[header] = str(value) if value is not None else ""
+                return row_data
+
+            for source_index, values in enumerate(
+                chain(preview_rows[header_row + 1 :], row_iterator)
+            ):
+                row_data = row_to_string_values(values)
+                if any(value != "" for value in row_data.values()):
+                    rows.append(
+                        {
+                            "excel_row": header_row + source_index + 2,
+                            "data": row_data,
+                        }
+                    )
+            return {
+                "sheet": target,
+                "columns": headers,
+                "total_rows": len(rows),
+                "rows": rows,
+            }
+        finally:
+            workbook.close()
+    df, actual_sheet, header_row = _read_excel_with_header_row(source_bytes, sheet_name)
     headers = [str(column) for column in df.columns]
     rows = []
-    for source_index, row in df.iterrows():
-        row_data = _row_to_dict(row)
+    for source_index, values in zip(
+        df.index,
+        df.itertuples(index=False, name=None),
+    ):
+        row_data = {
+            header: _sanitize(value)
+            for header, value in zip(headers, values)
+        }
         rows.append({
             "excel_row": header_row + int(source_index) + 2,
-            "data": {header: row_data.get(header, "") for header in headers},
+            "data": row_data,
         })
     return {
         "sheet": actual_sheet,
@@ -789,7 +994,7 @@ def ingest_csv(
     sep = ";" if sample.count(";") > sample.count(",") else ","
 
     df = pd.read_csv(BytesIO(file_bytes), sep=sep, dtype=str, encoding="utf-8-sig")
-    df.columns = [' '.join(str(c).strip().replace('\xa0', ' ').replace('\u200b', '').split()) for c in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
     df.dropna(how="all", inplace=True)
     df.fillna("", inplace=True)
 
@@ -1028,14 +1233,15 @@ def inspect_excel_workbook(file_bytes: bytes) -> dict:
     - jumlah baris per sheet (`sheet_row_counts`)
     - `default_sheet` terbaik yang memiliki kolom bermakna
     """
-    sheets = get_sheet_names(file_bytes)
+    workbook, _ = _open_excel_file(file_bytes)
+    sheets = list(workbook.sheet_names)
     sheet_columns: dict[str, list[str]] = {}
     sheet_samples: dict[str, dict[str, str]] = {}
     sheet_row_counts: dict[str, int] = {}
 
     for s in sheets:
         try:
-            df, _ = _read_excel(file_bytes, s)
+            df, _, _ = _read_excel_with_header_row(file_bytes, s, workbook)
             clean_cols = [
                 str(c) for c in df.columns
                 if not str(c).strip().lower().startswith("unnamed")
@@ -1059,6 +1265,7 @@ def inspect_excel_workbook(file_bytes: bytes) -> dict:
             sheet_columns[s] = []
             sheet_samples[s] = {}
             sheet_row_counts[s] = 0
+    workbook.close()
 
     nonempty_sheets = [
         s for s in sheets

@@ -49,11 +49,19 @@ const WIZARD_STEPS = [
 export const TARGET_SEARCH_COLUMNS = [
   {
     dbField: "doc_no",
-    label: "Loss Ref / Doc No",
+    label: "Loss Ref",
     required: true,
     sqlType: "VARCHAR(255)",
     description: "Nomor dokumen atau referensi klaim",
     patterns: [/^doc\s*no\.?$/i, /^loss\s*ref(erence)?$/i, /\bclaim\s*(no|number)\b/i],
+  },
+  {
+    dbField: "class_code",
+    label: "Class Code",
+    required: false,
+    sqlType: "VARCHAR(50)",
+    description: "Kode kelas bisnis atau COB",
+    patterns: [/^class[\s_-]*code$/i, /^classcode$/i, /^cob$/i, /class\s*of\s*business/i],
   },
   {
     dbField: "outstanding",
@@ -203,6 +211,7 @@ function detectMonthYearFromFilename(filename) {
 export default function ComparePage({ onNavigate }) {
   const {
     profiles,
+    cedants: masterCedants,
     loading: mappingsLoading,
     error: mappingsError,
     dbConnected,
@@ -253,11 +262,27 @@ export default function ComparePage({ onNavigate }) {
 
   const cedantOptions = useMemo(() => {
     const map = new Map();
+    masterCedants.forEach((cedant) => {
+      const name = String(cedant.cedant_name || cedant.cedant_code || "").trim();
+      const code = String(cedant.cedant_code || "").trim();
+      if (name && code) {
+        map.set(code.toUpperCase(), {
+          name,
+          code,
+          sheets: "All sheets",
+          lossRef: "",
+          dateOfLoss: "",
+        });
+      }
+    });
     allProfilesForTab.forEach((p) => {
-      if (p.cedant && !map.has(p.cedant)) {
-        map.set(p.cedant, {
+      if (p.cedant) {
+        const code = String(p.cedantCode || p.cedant).trim();
+        const key = code.toUpperCase();
+        map.set(key, {
+          ...map.get(key),
           name: p.cedant,
-          code: p.cedantCode || p.cedant,
+          code,
           sheets: p.sheetMet || "All sheets",
           lossRef: p.lossRef || "",
           dateOfLoss: p.dateOfLoss || "",
@@ -265,7 +290,7 @@ export default function ComparePage({ onNavigate }) {
       }
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "id"));
-  }, [allProfilesForTab]);
+  }, [allProfilesForTab, masterCedants]);
 
   const activeCedantProfiles = useMemo(() => {
     if (!selectedCedant?.name) return [];
@@ -330,9 +355,12 @@ export default function ComparePage({ onNavigate }) {
     let activeCedantObj = selectedCedant;
     if (!activeCedantObj) {
       const upperName = rawFile.name.toUpperCase();
+      const filenameTokens = upperName.split(/[^A-Z0-9]+/).filter(Boolean);
       const matchedFromFilename = cedantOptions.find((c) => {
         const cleanName = c.name.replace(/\s*\(.*?\)\s*/g, "").trim().toUpperCase();
-        return cleanName.length >= 3 && upperName.includes(cleanName);
+        const codeToken = String(c.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const matchesCode = codeToken.length >= 3 && filenameTokens.includes(codeToken);
+        return matchesCode || (cleanName.length >= 3 && upperName.includes(cleanName));
       });
       if (matchedFromFilename) {
         activeCedantObj = matchedFromFilename;
@@ -369,8 +397,9 @@ export default function ComparePage({ onNavigate }) {
       const initialTargetMap = matchExcelColumnsToTargets(cols, prof, targetSearchColumns);
       const backendMap = res.auto_mappings?.[defSheet] || {};
       setMapping({
-        ...backendMap,
         ...initialTargetMap,
+        ...(prof?.mapping || {}),
+        ...backendMap,
       });
       setPreparedUpload(null);
     } catch (err) {
@@ -388,8 +417,9 @@ export default function ComparePage({ onNavigate }) {
     const backendMap = inspectData?.auto_mappings?.[newSheet] || {};
     const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
     setMapping({
-      ...backendMap,
       ...targetMap,
+      ...(currentProfile?.mapping || {}),
+      ...backendMap,
     });
   };
 
@@ -398,48 +428,39 @@ export default function ComparePage({ onNavigate }) {
     const backendMap = inspectData?.auto_mappings?.[selectedSheet] || {};
     const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
     setMapping({
-      ...backendMap,
       ...targetMap,
+      ...(currentProfile?.mapping || {}),
+      ...backendMap,
     });
   };
 
-  /* Mengubah penugasan kolom Excel ke kolom Target (misal memilih kolom mana yang merupakan DOL) */
+  /* Mengubah penugasan kolom Excel ke field target. */
   const handleAssignExcelColumnToTarget = (excelColName, targetDbField) => {
     setMapping((prev) => {
       const next = { ...prev };
       /* Hapus penugasan lama jika kolom Excel ini sebelumnya dipetakan ke target lain */
       targetSearchColumns.forEach((t) => {
-        if (next[t.dbField] === excelColName) {
+        if (t.dbField !== targetDbField && next[t.dbField] === excelColName) {
           delete next[t.dbField];
         }
       });
       if (targetDbField) {
-        next[targetDbField] = excelColName;
+        if (excelColName) {
+          next[targetDbField] = excelColName;
+        } else {
+          delete next[targetDbField];
+        }
       }
       return next;
     });
   };
 
-  /* Lookup cepat untuk menandai kolom yang dipetakan ke field target. */
-  const excelColToTargetMap = useMemo(() => {
-    const map = {}; // { excelColName: targetObj }
-    targetSearchColumns.forEach((t) => {
-      const assignedExcelCol = mapping?.[t.dbField];
-      if (assignedExcelCol) {
-        map[assignedExcelCol] = t;
-      }
-    });
-    return map;
-  }, [mapping]);
-
-  const matchedExcelColsCount = useMemo(
-    () => scannedColumns.filter((col) => Boolean(excelColToTargetMap[col])).length,
-    [scannedColumns, excelColToTargetMap]
-  );
-
-  const unmatchedExcelColsCount = useMemo(
-    () => scannedColumns.length - matchedExcelColsCount,
-    [scannedColumns, matchedExcelColsCount]
+  const matchedTargetCount = targetSearchColumns.filter(
+    (target) => Boolean(mapping?.[target.dbField])
+  ).length;
+  const unmatchedTargetCount = targetSearchColumns.length - matchedTargetCount;
+  const missingRequiredTargets = targetSearchColumns.filter(
+    (target) => target.required && !mapping?.[target.dbField]
   );
 
   /* ── Eksekusi Simpan ke Master Database (Step 2 -> Step 3) ── */
@@ -558,7 +579,7 @@ export default function ComparePage({ onNavigate }) {
       : WIZARD_STEPS.findIndex((s) => s.id === currentStep);
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-4 sm:px-6 py-6 space-y-6 font-sans">
+    <div className="mx-auto w-full max-w-[1440px] px-4 sm:px-6 py-6 space-y-6 font-sans saas-page-enter">
       {/* ── Connected 3-Step Wizard Bar ── */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-surface)] px-5 py-3.5 shadow-[var(--shadow-card)] flex flex-wrap items-center justify-between gap-4">
         {WIZARD_STEPS.map((step, idx) => {
@@ -571,7 +592,7 @@ export default function ComparePage({ onNavigate }) {
                   isCompleted
                     ? "bg-[var(--color-valid)] text-white"
                     : isCurrent
-                      ? "bg-[var(--color-brand)] text-white shadow-xs"
+                      ? "bg-[var(--color-brand)] text-white shadow-sm"
                       : "bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] border border-[var(--color-line)]"
                 }`}
               >
@@ -606,7 +627,7 @@ export default function ComparePage({ onNavigate }) {
       {errorMessage && (
         <div
           role="alert"
-          className="p-4 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 rounded-[var(--radius-surface)] flex items-center justify-between gap-3 text-[var(--color-danger)] text-[var(--text-body-sm)]"
+          className="p-4 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 rounded-[var(--radius-surface)] flex items-center justify-between gap-3 text-[var(--color-danger)] text-[13px]"
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <ExclamationCircleIcon className="w-5 h-5 shrink-0 text-[var(--color-danger)]" />
@@ -626,11 +647,11 @@ export default function ComparePage({ onNavigate }) {
           STEP 1: UPLOAD & SCAN WORKBOOK HEADERS
       ════════════════════════════════════════════════════════════════════ */}
       {currentStep === "UPLOAD" && (
-        <div className="bg-[var(--color-surface)] p-5 sm:p-6 rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)] w-full space-y-6 text-[var(--text-body)]">
+        <div className="bg-[var(--color-surface)] p-5 sm:p-6 rounded-[var(--radius-surface)] border border-[var(--color-line)] shadow-[var(--shadow-card)] w-full space-y-6 text-sm">
           {/* Header: Title & Dataset Type Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[var(--color-line)] gap-3">
             <div>
-              <h2 className="text-[var(--text-title)] font-bold text-[var(--color-ink)] tracking-tight">
+              <h2 className="text-xl font-bold text-[var(--color-ink)] tracking-tight">
                 Upload OS Claims &amp; InfoPack Files
               </h2>
               <p className="text-xs text-[var(--color-ink-muted)] mt-0.5">
@@ -1080,11 +1101,11 @@ export default function ComparePage({ onNavigate }) {
                   </span>
                   <span>•</span>
                   <span className="text-[var(--color-valid)] font-bold">
-                    ✓ Ketemu (Target): {matchedExcelColsCount} Kolom
+                    ✓ Field cocok: {matchedTargetCount}/{targetSearchColumns.length}
                   </span>
                   <span>•</span>
                   <span className="text-rose-600 font-bold">
-                    ✕ Tidak Ketemu: {unmatchedExcelColsCount} Kolom
+                    ✕ Belum dipetakan: {unmatchedTargetCount}
                   </span>
                 </div>
               </div>
@@ -1101,45 +1122,27 @@ export default function ComparePage({ onNavigate }) {
               </div>
             </div>
 
-            {/* Banner Daftar Kolom Target yang Dicari Saat Ini */}
+            {/* Ringkasan konteks dan field inti yang akan dipetakan */}
             <div className="p-4 rounded-[var(--radius-surface)] bg-[var(--color-surface-sunken)] border border-[var(--color-line)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className="text-xs font-bold uppercase tracking-wider text-[var(--color-ink)]">
-                  Target Kolom yang Dicari Saat Ini ({targetSearchColumns.length} Target):
+                  Konteks Upload
                 </div>
                 <p className="text-xs text-[var(--color-ink-muted)]">
-                  Kolom Excel yang cocok dengan daftar target ditandai <strong>Hijau (Matched)</strong>, sedangkan kolom lainnya yang tidak termasuk/tidak ketemu ditandai <strong>Merah</strong>. Seluruh {scannedColumns.length} kolom tetap disimpan agar bisa di-GET.
+                  Cedant, bulan, dan tahun diambil dari pilihan upload. Hanya field inti yang perlu dicocokkan; semua kolom Excel tetap diarsipkan.
                 </p>
               </div>
 
               <div className="flex items-center gap-2 flex-wrap shrink-0">
-                {targetSearchColumns.map((t) => {
-                  const foundCol = mapping?.[t.dbField];
-                  return (
-                    <div
-                      key={t.dbField}
-                      className={`px-3 py-1.5 rounded-[var(--radius-control)] border text-xs font-semibold flex items-center gap-2 ${
-                        foundCol
-                          ? "bg-[var(--color-valid-soft)] text-[var(--color-valid)] border-[var(--color-valid)]/30"
-                          : "bg-rose-500/15 text-rose-600 border-rose-500/30"
-                      }`}
-                    >
-                      {foundCol ? (
-                        <>
-                          <CheckCircleIcon className="w-4 h-4 shrink-0" />
-                          <span>
-                            {t.label}: <strong className="font-mono">{foundCol}</strong>
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <ExclamationCircleIcon className="w-4 h-4 shrink-0" />
-                          <span>{t.label}: TIDAK DITEMUKAN</span>
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
+                <span className="px-3 py-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] text-xs font-semibold text-[var(--color-ink)]">
+                  Cedant: <strong className="font-mono">{selectedCedant?.code || inspectData.cedant_code || "—"}</strong>
+                </span>
+                <span className="px-3 py-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] text-xs font-semibold text-[var(--color-ink)]">
+                  Bulan: <strong>{bulan || "—"}</strong>
+                </span>
+                <span className="px-3 py-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] text-xs font-semibold text-[var(--color-ink)]">
+                  Tahun: <strong>{tahun || "—"}</strong>
+                </span>
               </div>
             </div>
 
@@ -1147,9 +1150,9 @@ export default function ComparePage({ onNavigate }) {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
                 {[
-                  { id: "ALL", label: `Semua Kolom Excel (${scannedColumns.length})` },
-                  { id: "MATCHED", label: `Ketemu / Matched (${matchedExcelColsCount})` },
-                  { id: "UNMATCHED", label: `Tidak Ketemu / Merah (${unmatchedExcelColsCount})` },
+                  { id: "ALL", label: `Semua Field (${targetSearchColumns.length})` },
+                  { id: "MATCHED", label: `Sudah Dipetakan (${matchedTargetCount})` },
+                  { id: "UNMATCHED", label: `Belum Dipetakan (${unmatchedTargetCount})` },
                 ].map((mode) => (
                   <button
                     key={mode.id}
@@ -1172,7 +1175,7 @@ export default function ComparePage({ onNavigate }) {
                   type="text"
                   value={filterText}
                   onChange={(e) => setFilterText(e.target.value)}
-                  placeholder="Cari nama kolom Excel..."
+                  placeholder="Cari field atau header Excel..."
                   className="w-full pl-8 pr-7 py-1.5 bg-[var(--color-surface)] border border-[var(--color-line)] rounded-lg text-xs font-medium text-[var(--color-ink)] placeholder-[var(--color-ink-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20"
                 />
                 {filterText && (
@@ -1187,81 +1190,71 @@ export default function ComparePage({ onNavigate }) {
               </div>
             </div>
 
-            {/* ── TABEL UTAMA TAHAP 2: SELURUH KOLOM YANG ADA DI FILE EXCEL ── */}
+            {/* ── TABEL FIELD INTI YANG PERLU DIPETAKAN ── */}
             <div className="border border-[var(--color-line)] rounded-[var(--radius-surface)] overflow-x-auto table-scroll shadow-2xs">
               <table className="w-full text-left border-collapse font-sans text-xs sm:text-[13px]">
                 <thead>
                   <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[var(--color-ink-muted)] text-[11px] uppercase font-bold tracking-wider">
                     <th className="py-3 px-3 w-12 text-center border-r border-[var(--color-line)]">No</th>
+                    <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">
+                      Field yang Dibutuhkan
+                    </th>
                     <th className="py-3 px-4 w-4/12 border-r border-[var(--color-line)]">
-                      Kolom di File Excel (Scanned Header)
+                      Kolom di File Excel
                     </th>
                     <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">
-                      Contoh Nilai (Baris 1)
+                      Contoh Nilai
                     </th>
-                    <th className="py-3 px-4 w-3/12 border-r border-[var(--color-line)]">
-                      Target Kolom Dicari
-                    </th>
-                    <th className="py-3 px-4 w-2/12">Status Pencarian</th>
+                    <th className="py-3 px-4 w-2/12">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--color-line)] text-[var(--color-ink)]">
-                  {scannedColumns
-                    .filter((col) => {
-                      const matchedTarget = excelColToTargetMap[col];
-                      if (filterMode === "MATCHED" && !matchedTarget) return false;
-                      if (filterMode === "UNMATCHED" && matchedTarget) return false;
+                  {targetSearchColumns
+                    .filter((target) => {
+                      const mappedColumn = mapping?.[target.dbField];
+                      if (filterMode === "MATCHED" && !mappedColumn) return false;
+                      if (filterMode === "UNMATCHED" && mappedColumn) return false;
                       if (!filterText.trim()) return true;
                       const q = filterText.toLowerCase();
-                      const sample = String(sheetSamples[col] || "").toLowerCase();
-                      return col.toLowerCase().includes(q) || sample.includes(q);
+                      const sample = String(sheetSamples[mappedColumn] || "").toLowerCase();
+                      return (
+                        target.label.toLowerCase().includes(q) ||
+                        target.dbField.toLowerCase().includes(q) ||
+                        String(mappedColumn || "").toLowerCase().includes(q) ||
+                        sample.includes(q)
+                      );
                     })
-                    .map((col, idx) => {
-                      const matchedTarget = excelColToTargetMap[col];
-                      const isMatched = Boolean(matchedTarget);
+                    .map((target, idx) => {
+                      const mappedColumn = mapping?.[target.dbField] || "";
+                      const isMatched = Boolean(mappedColumn);
 
-                      /* Kolom yang cocok (DOL) -> Hijau; Sisanya yang gak ketemu -> Merah */
                       const rowClass = isMatched
                         ? "bg-[var(--color-valid-soft)]/55 hover:bg-[var(--color-valid-soft)] border-l-4 border-l-[var(--color-valid)]"
-                        : "bg-rose-500/10 hover:bg-rose-500/15 border-l-4 border-l-rose-500";
+                        : target.required
+                          ? "bg-rose-500/10 hover:bg-rose-500/15 border-l-4 border-l-rose-500"
+                          : "bg-[var(--color-surface)] hover:bg-[var(--color-surface-sunken)] border-l-4 border-l-[var(--color-line)]";
 
                       return (
-                        <tr key={col} className={`transition-colors ${rowClass}`}>
+                        <tr key={target.dbField} className={`transition-colors ${rowClass}`}>
                           <td className="py-3 px-3 text-center font-mono text-xs text-[var(--color-ink-muted)] font-semibold border-r border-[var(--color-line)]">
                             {idx + 1}
                           </td>
 
-                          {/* Nama Kolom di File Excel */}
                           <td className="py-3 px-4 border-r border-[var(--color-line)]">
-                            <span
-                              className={`font-mono font-bold text-xs sm:text-[13px] ${
-                                isMatched ? "text-[var(--color-valid)]" : "text-rose-700"
-                              }`}
-                            >
-                              {col}
+                            <span className="font-bold text-xs sm:text-[13px] text-[var(--color-ink)]">
+                              {target.label}
+                            </span>
+                            <span className="block mt-0.5 font-mono text-[10px] text-[var(--color-ink-muted)]">
+                              {target.dbField === "doc_no" ? "loss_ref" : target.dbField}
+                              {target.required ? " · Wajib" : " · Opsional"}
                             </span>
                           </td>
 
-                          {/* Contoh Nilai dari Baris Pertama */}
-                          <td className="py-3 px-4 border-r border-[var(--color-line)] font-mono text-xs text-[var(--color-ink-body)]">
-                            {sheetSamples[col] ? (
-                              <span
-                                className="truncate block max-w-[260px]"
-                                title={sheetSamples[col]}
-                              >
-                                {sheetSamples[col]}
-                              </span>
-                            ) : (
-                              <span className="text-[var(--color-ink-faint)] italic">—</span>
-                            )}
-                          </td>
-
-                          {/* Dropdown Pemetaan ke Daftar Kolom Target */}
                           <td className="py-3 px-4 border-r border-[var(--color-line)]">
                             <select
-                              value={matchedTarget?.dbField || ""}
+                              value={mappedColumn}
                               onChange={(e) =>
-                                handleAssignExcelColumnToTarget(col, e.target.value)
+                                handleAssignExcelColumnToTarget(e.target.value, target.dbField)
                               }
                               className={`w-full py-1.5 px-2.5 rounded-[var(--radius-control)] text-xs font-semibold border cursor-pointer focus:outline-none ${
                                 isMatched
@@ -1269,26 +1262,44 @@ export default function ComparePage({ onNavigate }) {
                                   : "bg-[var(--color-surface)] border-rose-300 text-rose-600"
                               }`}
                             >
-                              <option value="">— Tidak Cocok (Unmatched) —</option>
-                              {targetSearchColumns.map((t) => (
-                                <option key={t.dbField} value={t.dbField}>
-                                  {t.label} ({t.dbField})
+                              <option value="">— Pilih kolom Excel —</option>
+                              {scannedColumns.map((column) => (
+                                <option key={column} value={column}>
+                                  {column}
                                 </option>
                               ))}
                             </select>
                           </td>
 
-                          {/* Badge Status Ketemu (Hijau) vs Tidak Ketemu (Merah) */}
+                          <td className="py-3 px-4 border-r border-[var(--color-line)] font-mono text-xs text-[var(--color-ink-body)]">
+                            {mappedColumn && sheetSamples[mappedColumn] ? (
+                              <span
+                                className="truncate block max-w-[260px]"
+                                title={sheetSamples[mappedColumn]}
+                              >
+                                {sheetSamples[mappedColumn]}
+                              </span>
+                            ) : (
+                              <span className="text-[var(--color-ink-faint)] italic">
+                                {mappedColumn ? "Nilai kosong" : "Pilih kolom untuk melihat contoh"}
+                              </span>
+                            )}
+                          </td>
+
                           <td className="py-3 px-4">
                             {isMatched ? (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-control)] bg-[var(--color-valid-soft)] text-[var(--color-valid)] font-bold text-[11px] border border-[var(--color-valid)]/30">
                                 <CheckCircleIcon className="w-3.5 h-3.5 shrink-0" />
-                                <span>KETEMU ({matchedTarget.dbField.toUpperCase()})</span>
+                                <span>TERPETAKAN</span>
                               </span>
-                            ) : (
+                            ) : target.required ? (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-control)] bg-rose-500/15 text-rose-600 font-bold text-[11px] border border-rose-500/30">
                                 <ExclamationCircleIcon className="w-3.5 h-3.5 shrink-0" />
-                                <span>TIDAK KETEMU</span>
+                                <span>WAJIB DIPETAKAN</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-[var(--radius-control)] bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)] font-bold text-[11px] border border-[var(--color-line)]">
+                                OPSIONAL
                               </span>
                             )}
                           </td>
@@ -1310,14 +1321,21 @@ export default function ComparePage({ onNavigate }) {
               Back to Upload
             </Button>
 
-            <Button
-              variant="primary"
-              icon={ArrowRightIcon}
-              disabled={submitting}
-              onClick={handleExecuteSave}
-            >
-              Process &amp; Save Data ({sheetRowCount.toLocaleString("id-ID")} Rows)
-            </Button>
+            <div className="flex flex-col items-end gap-2">
+              {missingRequiredTargets.length > 0 && (
+                <p className="text-xs font-semibold text-rose-600" role="status">
+                  Petakan field wajib: {missingRequiredTargets.map((target) => target.label).join(", ")}.
+                </p>
+              )}
+              <Button
+                variant="primary"
+                icon={ArrowRightIcon}
+                disabled={submitting || missingRequiredTargets.length > 0}
+                onClick={handleExecuteSave}
+              >
+                Process &amp; Save Data ({sheetRowCount.toLocaleString("id-ID")} Rows)
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -1342,14 +1360,20 @@ export default function ComparePage({ onNavigate }) {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-semibold">
               <span className="text-[var(--color-ink)]">
-                {uploadPct < 100 ? "Mengunggah workbook..." : "Menyimpan ke database..."}
+                {uploadPct < 100
+                  ? "Mengunggah workbook..."
+                  : "File terkirim; server sedang memproses dan menyimpan..."}
               </span>
-              <span className="text-[var(--color-brand)] font-mono">{uploadPct}%</span>
+              <span className="text-[var(--color-brand)] font-mono">
+                {uploadPct < 100 ? `${uploadPct}%` : "Memproses"}
+              </span>
             </div>
             <div className="w-full h-2 bg-[var(--color-surface-sunken)] rounded-full overflow-hidden">
               <div
-                className="h-full bg-[var(--color-brand)] rounded-full transition-all duration-300"
-                style={{ width: `${Math.max(10, uploadPct)}%` }}
+                className={`h-full bg-[var(--color-brand)] rounded-full transition-all duration-300 ${
+                  uploadPct >= 100 ? "animate-pulse" : ""
+                }`}
+                style={{ width: uploadPct < 100 ? `${Math.max(10, uploadPct)}%` : "35%" }}
               />
             </div>
           </div>

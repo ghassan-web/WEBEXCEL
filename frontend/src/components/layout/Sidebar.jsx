@@ -8,15 +8,16 @@ import {
   ArrowsRightLeftIcon,
   ClockIcon,
   BookOpenIcon,
+  UsersIcon,
+  QuestionMarkCircleIcon,
   ChevronDownIcon,
-  ChevronLeftIcon,
 } from "@heroicons/react/24/outline";
 
 const moduleUrl = import.meta.env.VITE_MODULE_URL?.trim() || "";
 
 const footerButtonBaseClass =
-  "w-full flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-control)] border transition-all duration-150 cursor-pointer text-[var(--text-caption)] font-medium";
-const moduleButtonClass = `${footerButtonBaseClass} text-white/90 bg-white/[0.06] border-white/15 hover:text-white hover:border-white/30 hover:bg-white/[0.12] active:scale-[0.99]`;
+  "w-full flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-control)] border transition-all duration-150 cursor-pointer text-[14px] leading-[20px] font-medium";
+const moduleButtonClass = `${footerButtonBaseClass} text-white/95 bg-white/[0.08] border-white/15 hover:text-white hover:border-white/30 hover:bg-white/[0.14]`;
 
 export const NAVIGATION_GROUPS = [
   {
@@ -93,6 +94,28 @@ export const NAVIGATION_GROUPS = [
       },
     ],
   },
+  {
+    id: "administration",
+    title: "Administration",
+    items: [
+      {
+        id: "users",
+        key: "users",
+        label: "User Management",
+        icon: UsersIcon,
+        breadcrumb: "Administration / User Management",
+        description: "Kelola akun pengguna, peran otorisasi (RBAC), dan status aktivasi workspace",
+      },
+      {
+        id: "guide",
+        key: "guide",
+        label: "User Guide",
+        icon: QuestionMarkCircleIcon,
+        breadcrumb: "Administration / User Guide",
+        description: "Panduan operasional alur upload, pemetaan kolom, master data, dan rekonsiliasi OSCLN",
+      },
+    ],
+  },
 ];
 
 export function getPageMeta(activeKey) {
@@ -152,10 +175,10 @@ export default function Sidebar({
           {!effectiveCollapsed && (
             <div className="flex flex-col min-w-0 transition-opacity duration-150">
               <span className="font-semibold text-white text-[13.5px] tracking-tight leading-tight truncate">
-                OS Claims Hub®
+                Indonesia Re®
               </span>
               <span className="text-[10.5px] text-slate-300/80 font-medium tracking-wide mt-0.5 truncate">
-                Treaty RU Claims
+                RU Claims
               </span>
             </div>
           )}
@@ -196,11 +219,10 @@ export default function Sidebar({
                   }
                 };
 
-                /* Active state menyatu dengan warna background sidebar (bukan biru terang),
-                   dengan aksen garis kiri putih, border halus, dan inner highlight */
+                /* Selaras dengan example/Sidebar.jsx: clean soft pill tanpa border, shadow, atau garis samping */
                 const itemStateClass = isActive
-                  ? "bg-white/[0.09] text-white font-semibold border border-white/[0.14] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.1)]"
-                  : "border border-transparent text-slate-300/80 font-medium hover:text-white hover:bg-white/[0.05]";
+                  ? "bg-white/15 text-white font-semibold"
+                  : "text-slate-300/80 font-medium hover:text-white hover:bg-white/[0.08]";
 
                 return (
                   <div key={item.id} className="relative group/navitem space-y-0.5">
@@ -211,16 +233,10 @@ export default function Sidebar({
                         tabIndex={isBlocked ? -1 : 0}
                         aria-expanded={isOpen}
                         aria-label={item.label}
-                        className={`relative w-full h-9 flex items-center justify-between px-3 rounded-[var(--radius-control)] text-[13px] transition-all duration-150 cursor-pointer ${itemStateClass} ${
+                        className={`w-full h-9 flex items-center justify-between px-3 rounded-[var(--radius-control)] text-[13px] transition-colors duration-150 cursor-pointer ${itemStateClass} ${
                           effectiveCollapsed ? "justify-center px-0" : ""
                         }`}
                       >
-                        {isActive && (
-                          <span
-                            className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-white"
-                            aria-hidden="true"
-                          />
-                        )}
                         <div className="flex items-center gap-2.5 min-w-0">
                           <IconComp
                             className={`w-[17px] h-[17px] shrink-0 transition-colors ${
@@ -246,16 +262,10 @@ export default function Sidebar({
                         tabIndex={isBlocked ? -1 : 0}
                         aria-current={isActive ? "page" : undefined}
                         aria-label={item.label}
-                        className={`relative w-full h-9 flex items-center gap-2.5 px-3 rounded-[var(--radius-control)] text-[13px] transition-all duration-150 cursor-pointer ${itemStateClass} ${
+                        className={`w-full h-9 flex items-center gap-2.5 px-3 rounded-[var(--radius-control)] text-[13px] transition-colors duration-150 cursor-pointer ${itemStateClass} ${
                           effectiveCollapsed ? "justify-center px-0" : ""
                         }`}
                       >
-                        {isActive && (
-                          <span
-                            className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-white"
-                            aria-hidden="true"
-                          />
-                        )}
                         <IconComp
                           className={`w-[17px] h-[17px] shrink-0 transition-colors ${
                             isActive
@@ -288,8 +298,8 @@ export default function Sidebar({
                               aria-label={sub.label}
                               className={`w-full text-left block px-2.5 py-1.5 rounded-[var(--radius-control)] text-[12.5px] transition-colors cursor-pointer ${
                                 isSubActive
-                                  ? "text-white bg-white/[0.09] border border-white/10 font-semibold"
-                                  : "text-slate-300/75 font-medium hover:text-white hover:bg-white/[0.05]"
+                                  ? "text-white bg-white/15 font-semibold"
+                                  : "text-slate-300/75 font-medium hover:text-white hover:bg-white/[0.08]"
                               }`}
                             >
                               {sub.label}
@@ -306,7 +316,7 @@ export default function Sidebar({
         ))}
       </div>
 
-      {/* Bottom Footer: Back to Portal */}
+      {/* Bottom Footer: Back to Portal (ukuran & perilaku sama dengan example/Sidebar.jsx) */}
       <div className="p-3 border-t border-white/10 shrink-0">
         {moduleUrl ? (
           <a
@@ -315,7 +325,18 @@ export default function Sidebar({
             title="Return to Main Portal"
             className={`${moduleButtonClass} ${effectiveCollapsed ? "px-0 justify-center" : ""}`}
           >
-            <ChevronLeftIcon className="w-4 h-4 shrink-0 text-slate-300" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-4 h-4 shrink-0 text-slate-300"
+              aria-hidden="true"
+            >
+              <path d="m15 18-6-6 6-6" />
+            </svg>
             {!effectiveCollapsed && <span>Back to Portal</span>}
           </a>
         ) : (
@@ -324,9 +345,22 @@ export default function Sidebar({
             onClick={() => onNavigate("overview")}
             aria-label="Back to Portal"
             title="Back to Portal"
-            className={`${moduleButtonClass} ${effectiveCollapsed ? "px-0 justify-center" : ""}`}
+            className={`${moduleButtonClass} ${
+              effectiveCollapsed ? "px-0 justify-center" : ""
+            }`}
           >
-            <ChevronLeftIcon className="w-4 h-4 shrink-0 text-slate-300" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-4 h-4 shrink-0 text-white/75"
+              aria-hidden="true"
+            >
+              <path d="m15 18-6-6 6-6" />
+            </svg>
             {!effectiveCollapsed && <span>Back to Portal</span>}
           </button>
         )}

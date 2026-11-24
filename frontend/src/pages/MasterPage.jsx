@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { getMasterData, getColumnMappings, exportMasterCsv } from "../services/api";
 import { PageHeader, Button, Badge } from "../components/ui";
 import {
@@ -48,6 +48,9 @@ export default function MasterPage() {
   const [selectedCedant, setSelectedCedant] = useState("");
   const [mappingProfiles, setMappingProfiles] = useState([]);
   const [cedantOptionsError, setCedantOptionsError] = useState(null);
+  const [cedantDropdownOpen, setCedantDropdownOpen] = useState(false);
+  const [cedantSearch, setCedantSearch] = useState("");
+  const cedantDropdownRef = useRef(null);
   const [columnView, setColumnView] = useState("core"); // 'core' | 'all'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -58,6 +61,11 @@ export default function MasterPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    if (columnView === "all" && !selectedCedant) {
+      setData({ total: 0, scanned_headers: [], rows: [] });
+      setLoading(false);
+      return;
+    }
     try {
       const res = await getMasterData(tipeData, {
         cedant: selectedCedant || undefined,
@@ -72,7 +80,7 @@ export default function MasterPage() {
     } finally {
       setLoading(false);
     }
-  }, [tipeData, selectedCedant, search, filters, page]);
+  }, [tipeData, selectedCedant, search, filters, page, columnView]);
 
   useEffect(() => {
     load();
@@ -91,6 +99,17 @@ export default function MasterPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!cedantDropdownRef.current?.contains(event.target)) {
+        setCedantDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   useEffect(() => {
@@ -119,6 +138,13 @@ export default function MasterPage() {
   const selectedCedantName = cedantOptions.find(
     (option) => option.code === selectedCedant,
   )?.name;
+  const filteredCedantOptions = useMemo(() => {
+    const query = cedantSearch.trim().toLocaleLowerCase();
+    if (!query) return cedantOptions;
+    return cedantOptions.filter(({ code, name }) =>
+      `${name} ${code}`.toLocaleLowerCase().includes(query),
+    );
+  }, [cedantOptions, cedantSearch]);
   const activeCoreFilters = CORE_FILTERS[activeTab];
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
@@ -230,6 +256,8 @@ export default function MasterPage() {
                 setFilters({});
                 setFilterDraft({});
                 setFilterOpen(false);
+                setCedantSearch("");
+                setCedantDropdownOpen(false);
               }}
               className={`px-4 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold transition-all cursor-pointer ${
                 activeTab === key
@@ -242,29 +270,118 @@ export default function MasterPage() {
           ))}
         </div>
 
-        <div className="flex items-center gap-2">
-          <label
-            htmlFor="master-cedant-filter"
-            className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-ink-muted)]"
+        <div className="relative w-full sm:w-[320px]" ref={cedantDropdownRef}>
+          <span
+            className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-[var(--color-ink-muted)]"
           >
-            Cedant
-          </label>
-          <select
+            Filter Cedant
+          </span>
+          <button
+            type="button"
             id="master-cedant-filter"
-            value={selectedCedant}
-            onChange={(event) => {
-              setSelectedCedant(event.target.value);
-              setPage(0);
-            }}
-            className="max-w-[260px] rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-xs font-medium text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+            aria-haspopup="listbox"
+            aria-expanded={cedantDropdownOpen}
+            aria-controls="master-cedant-options"
+            onClick={() => setCedantDropdownOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-left text-sm text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]"
           >
-            <option value="">Semua Cedant</option>
-            {cedantOptions.map((option) => (
-              <option key={option.code} value={option.code}>
-                {option.name} ({option.code})
-              </option>
-            ))}
-          </select>
+            <span className="min-w-0">
+              <span className="block truncate font-semibold">
+                {selectedCedantName || "Semua Cedant"}
+              </span>
+              <span className="block truncate text-[11px] text-[var(--color-ink-muted)]">
+                {selectedCedant || "Tampilkan data dari semua cedant"}
+              </span>
+            </span>
+            <ChevronDownIcon
+              className={`h-4 w-4 shrink-0 text-[var(--color-ink-muted)] transition-transform ${
+                cedantDropdownOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+          {cedantDropdownOpen && (
+            <div className="absolute right-0 z-40 mt-2 w-full overflow-hidden rounded-[var(--radius-surface)] border border-[var(--color-line)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]">
+              <div className="border-b border-[var(--color-line)] p-3">
+                <div className="relative">
+                  <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-ink-muted)]" />
+                  <input
+                    type="search"
+                    autoFocus
+                    value={cedantSearch}
+                    onChange={(event) => setCedantSearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setCedantDropdownOpen(false);
+                    }}
+                    placeholder="Cari nama atau kode cedant..."
+                    aria-label="Cari nama atau kode cedant"
+                    className="w-full rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] py-2 pl-9 pr-3 text-xs text-[var(--color-ink)] placeholder:text-[var(--color-ink-muted)] focus:border-[var(--color-brand)] focus:outline-none"
+                  />
+                </div>
+                <p className="mt-2 text-[11px] text-[var(--color-ink-muted)]">
+                  {filteredCedantOptions.length} cedant ditemukan
+                </p>
+              </div>
+
+              <div
+                id="master-cedant-options"
+                role="listbox"
+                aria-label="Pilihan cedant"
+                className="max-h-64 overflow-y-auto p-1"
+              >
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={!selectedCedant}
+                  onClick={() => {
+                    setSelectedCedant("");
+                    setCedantSearch("");
+                    setCedantDropdownOpen(false);
+                  }}
+                  className={`w-full rounded-[var(--radius-control)] px-3 py-2 text-left text-xs transition-colors ${
+                    !selectedCedant
+                      ? "bg-[var(--color-brand-soft)] font-semibold text-[var(--color-brand)]"
+                      : "text-[var(--color-ink)] hover:bg-[var(--color-surface-sunken)]"
+                  }`}
+                >
+                  <span className="block">Semua Cedant</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--color-ink-muted)]">
+                    Tampilkan data dari semua cedant
+                  </span>
+                </button>
+
+                {filteredCedantOptions.length ? (
+                  filteredCedantOptions.map((option) => (
+                    <button
+                      key={option.code}
+                      type="button"
+                      role="option"
+                      aria-selected={selectedCedant === option.code}
+                      onClick={() => {
+                        setSelectedCedant(option.code);
+                        setCedantSearch("");
+                        setCedantDropdownOpen(false);
+                      }}
+                      className={`mt-1 flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left text-xs transition-colors ${
+                        selectedCedant === option.code
+                          ? "bg-[var(--color-brand-soft)] font-semibold text-[var(--color-brand)]"
+                          : "text-[var(--color-ink)] hover:bg-[var(--color-surface-sunken)]"
+                      }`}
+                    >
+                      <span className="min-w-0 truncate">{option.name}</span>
+                      <span className="shrink-0 rounded border border-[var(--color-line)] bg-[var(--color-surface-sunken)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-ink-muted)]">
+                        {option.code}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-3 py-4 text-center text-xs text-[var(--color-ink-muted)]">
+                    Cedant tidak ditemukan.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Column View Mode Toggle: Core DB Columns vs All Scanned Excel Headers */}
@@ -323,10 +440,14 @@ export default function MasterPage() {
             <span className="text-sm font-bold text-[var(--color-ink)]">
               {columnView === "core"
                 ? "Core Master Database Records"
-                : "Full Scanned Excel Columns (All Headers)"}
+                : selectedCedantName
+                  ? `Scanned Excel Columns — ${selectedCedantName}`
+                  : "Scanned Excel Columns — Pilih Cedant"}
             </span>
             <Badge tone="brand">
-              {totalRows.toLocaleString("id-ID")} rows
+              {columnView === "all" && !selectedCedant
+                ? "Per cedant"
+                : `${totalRows.toLocaleString("id-ID")} rows`}
             </Badge>
             {selectedCedantName && (
               <Badge tone="valid">{selectedCedantName}</Badge>
@@ -460,6 +581,16 @@ export default function MasterPage() {
                       <th className="px-4 py-3 text-left whitespace-nowrap">Currency</th>
                       <th className="px-4 py-3 text-right whitespace-nowrap">Outstanding</th>
                     </>
+                  ) : !selectedCedant ? (
+                    <div className="flex min-h-64 flex-col items-center justify-center gap-2 px-6 text-center">
+                      <FunnelIcon className="h-8 w-8 text-[var(--color-brand)]" />
+                      <p className="text-sm font-semibold text-[var(--color-ink)]">
+                        Pilih cedant untuk melihat scanned columns
+                      </p>
+                      <p className="max-w-md text-xs text-[var(--color-ink-muted)]">
+                        Gunakan filter Cedant di atas. Kolom dan data akan ditampilkan khusus untuk cedant yang dipilih agar tidak bercampur.
+                      </p>
+                    </div>
                   ) : (
                     <>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Code</th>
@@ -657,7 +788,7 @@ export default function MasterPage() {
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
+        {totalPages > 1 && (columnView === "core" || selectedCedant) && (
           <div className="px-5 py-3 bg-[var(--color-surface-sunken)] border-t border-[var(--color-line)] flex items-center justify-between">
             <span className="text-xs text-[var(--color-ink-muted)] font-mono">
               {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalRows)} dari{" "}

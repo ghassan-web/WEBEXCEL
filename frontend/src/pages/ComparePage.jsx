@@ -4,6 +4,7 @@ import {
   confirmMasterUploadMapping,
   inspectMasterFile,
   prepareMasterUpload,
+  skipMasterUploadSheet,
 } from "../services/api";
 import { Button, Badge } from "../components/ui";
 import {
@@ -171,6 +172,23 @@ function matchExcelColumnsToTargets(excelColumns = [], activeProfile = null, tar
   });
 
   return matchedMap;
+}
+
+function keepMappingsPresentInHeaders(mapping, headers) {
+  const headerLookup = new Map(
+    headers.map((header) => [
+      String(header).trim().replace(/\s+/g, " ").toLowerCase(),
+      header,
+    ])
+  );
+  return Object.fromEntries(
+    Object.entries(mapping || {}).flatMap(([field, header]) => {
+      const actualHeader = headerLookup.get(
+        String(header || "").trim().replace(/\s+/g, " ").toLowerCase()
+      );
+      return actualHeader ? [[field, actualHeader]] : [];
+    })
+  );
 }
 
 /** Auto-detect bulan & tahun dari nama file (contoh: "ACA - 08_INDO RE - Os per 31Agt2026...") */
@@ -396,11 +414,11 @@ export default function ComparePage({ onNavigate }) {
       const prof = allProfilesForTab.find((p) => p.cedant === activeCedantObj?.name) || null;
       const initialTargetMap = matchExcelColumnsToTargets(cols, prof, targetSearchColumns);
       const backendMap = res.auto_mappings?.[defSheet] || {};
-      setMapping({
+      setMapping(keepMappingsPresentInHeaders({
         ...initialTargetMap,
         ...(prof?.mapping || {}),
         ...backendMap,
-      });
+      }, cols));
       setPreparedUpload(null);
     } catch (err) {
       setErrorMessage(err.message || "Gagal memindai header file Excel. Pastikan backend berjalan di port 8000.");
@@ -415,23 +433,33 @@ export default function ComparePage({ onNavigate }) {
     setSelectedSheet(newSheet);
     const cols = inspectData?.sheet_columns?.[newSheet] || [];
     const backendMap = inspectData?.auto_mappings?.[newSheet] || {};
+    const preparedSheet = preparedUpload?.sheets?.find(
+      (sheet) => sheet.sheet_name === newSheet
+    );
+    const preparedMap = preparedSheet?.suggested_mapping || {};
     const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
-    setMapping({
+    setMapping(keepMappingsPresentInHeaders({
       ...targetMap,
       ...(currentProfile?.mapping || {}),
       ...backendMap,
-    });
+      ...preparedMap,
+    }, cols));
+    setErrorMessage(preparedSheet?.error_message || "");
   };
 
   const handleAutoMatchAgain = () => {
     const cols = inspectData?.sheet_columns?.[selectedSheet] || [];
     const backendMap = inspectData?.auto_mappings?.[selectedSheet] || {};
+    const preparedMap = preparedUpload?.sheets?.find(
+      (sheet) => sheet.sheet_name === selectedSheet
+    )?.suggested_mapping || {};
     const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
-    setMapping({
+    setMapping(keepMappingsPresentInHeaders({
       ...targetMap,
       ...(currentProfile?.mapping || {}),
       ...backendMap,
-    });
+      ...preparedMap,
+    }, cols));
   };
 
   /* Mengubah penugasan kolom Excel ke field target. */
@@ -464,7 +492,7 @@ export default function ComparePage({ onNavigate }) {
   );
 
   /* ── Eksekusi Simpan ke Master Database (Step 2 -> Step 3) ── */
-  const handleExecuteSave = async () => {
+  const executeUpload = async ({ skipSelected = false } = {}) => {
     if (!file) return;
     setCurrentStep("EXECUTING");
     setSubmitting(true);
@@ -488,34 +516,92 @@ export default function ComparePage({ onNavigate }) {
         fd.append("tipe_data", tipeData);
         if (cedantName) fd.append("cedant", cedantName);
         if (cedantCode) fd.append("cedant_code", cedantCode);
+        if (skipSelected) fd.append("skip_sheet_name", selectedSheet);
         fd.append("file", file);
         prepared = await prepareMasterUpload(fd, (pct) => setUploadPct(pct));
         setPreparedUpload(prepared);
       }
 
-      const sheet = prepared.sheets?.find(
+      const selected = prepared.sheets?.find(
         (item) => item.sheet_name === selectedSheet
       );
-      if (!sheet) {
+      if (!selected) {
         throw new Error("Sheet yang dipilih tidak berhasil disiapkan untuk mapping.");
       }
-      if (sheet.status === "ready") {
-        throw new Error("Sheet ini sudah selesai diproses.");
+      setUploadPct(100);
+      if (skipSelected && selected.status === "ready") {
+        throw new Error("Sheet ini sudah diproses ke Master dan tidak dapat dilewati.");
       }
-      const confirmed = sheet.status === "empty"
-        ? { status: "ready", rows_appended: 0, rows_updated: 0, rows_skipped: 0 }
-        : await confirmMasterUploadMapping(sheet.table_id, mapping);
-      const updatedSheets = prepared.sheets.map((item) =>
-        item.table_id === sheet.table_id
-          ? {
-              ...item,
-              status: "ready",
-              mapping_version: confirmed.mapping_version ?? item.suggested_version,
-            }
-          : item
+
+      let updatedSheets = [...prepared.sheets];
+      const results = [];
+      const autoErrors = [];
+
+      if (skipSelected && selected.status !== "skipped") {
+        await skipMasterUploadSheet(selected.table_id);
+        updatedSheets = updatedSheets.map((item) =>
+          item.table_id === selected.table_id
+            ? { ...item, status: "skipped", error_message: null }
+            : item
+        );
+      }
+
+      const eligibleSheets = updatedSheets.filter(
+        (item) =>
+          !["ready", "skipped", "empty"].includes(item.status) &&
+          item.mapping_complete &&
+          !item.error_message &&
+          item.table_id !== selected.table_id
       );
+      const sheetsToConfirm = [...eligibleSheets];
+      if (
+        !skipSelected &&
+        !["ready", "skipped", "empty"].includes(selected.status) &&
+        missingRequiredTargets.length === 0
+      ) {
+        sheetsToConfirm.push(selected);
+      }
+
+      for (const sheet of sheetsToConfirm) {
+        const isSelected = sheet.table_id === selected.table_id;
+        try {
+          const confirmed = await confirmMasterUploadMapping(
+            sheet.table_id,
+            isSelected ? mapping : sheet.suggested_mapping
+          );
+          results.push({ ...confirmed, total_rows: sheet.total_rows });
+          updatedSheets = updatedSheets.map((item) =>
+            item.table_id === sheet.table_id
+              ? {
+                  ...item,
+                  status: "ready",
+                  mapping_version: confirmed.mapping_version ?? item.suggested_version,
+                  error_message: null,
+                  rows_appended: confirmed.rows_appended || 0,
+                  rows_updated: confirmed.rows_updated || 0,
+                  rows_skipped: confirmed.rows_skipped || 0,
+                }
+              : item
+          );
+        } catch (sheetError) {
+          updatedSheets = updatedSheets.map((item) =>
+            item.table_id === sheet.table_id
+              ? { ...item, status: "needs_review", error_message: sheetError.message }
+              : item
+          );
+          if (isSelected) {
+            setPreparedUpload({ ...prepared, sheets: updatedSheets });
+            throw sheetError;
+          }
+          autoErrors.push(`${sheet.sheet_name}: ${sheetError.message}`);
+        }
+      }
+
       const pendingSheets = updatedSheets.filter(
-        (item) => item.status !== "ready" && item.status !== "empty"
+        (item) => item.status === "needs_review"
+      );
+      const skippedSheets = updatedSheets.filter(
+        (item) => item.status === "skipped"
       );
       const updatedPrepared = {
         ...prepared,
@@ -523,27 +609,86 @@ export default function ComparePage({ onNavigate }) {
         sheets: updatedSheets,
       };
       setPreparedUpload(updatedPrepared);
-      const resultMessage = sheet.status === "empty"
-        ? "Sheet berhasil diarsipkan; tidak ada baris data untuk diproses."
-        : confirmed.period_replaced
-          ? `Periode lama diganti: ${confirmed.rows_replaced} baris Master dan ${confirmed.result_rows_replaced} baris hasil lama dihapus; ${confirmed.rows_appended} baris Master dan ${confirmed.result_rows_appended} baris hasil baru disimpan.`
-        : `Upload berhasil. ${confirmed.rows_appended} baris ditambahkan, ${confirmed.rows_updated} diganti pada periode yang sama, dan ${confirmed.rows_skipped} dilewati.`;
+      if (updatedSheets.some((item) => item.status === "ready")) {
+        await reloadMappings();
+      }
+      const processedSheetCount = updatedSheets.filter(
+        (item) => item.status === "ready"
+      ).length;
+      const messageParts = [
+        `${processedSheetCount} sheet berhasil diproses`,
+        `${skippedSheets.length} sheet ditandai tidak dipakai`,
+      ];
+      const rowsAppended = updatedSheets.reduce(
+        (sum, item) => sum + (item.rows_appended || 0),
+        0
+      );
+      const rowsUpdated = updatedSheets.reduce(
+        (sum, item) => sum + (item.rows_updated || 0),
+        0
+      );
+      const rowsSkipped = updatedSheets.reduce(
+        (sum, item) => sum + (item.rows_skipped || 0),
+        0
+      );
+      const replacementResults = results.filter((item) => item.period_replaced);
+      if (selected.status === "empty") {
+        messageParts.splice(
+          0,
+          messageParts.length,
+          "Sheet berhasil diarsipkan; tidak ada baris data untuk diproses"
+        );
+      } else {
+        messageParts.push(
+          `Upload berhasil. ${rowsAppended} baris ditambahkan, ${rowsUpdated} diganti pada periode yang sama, dan ${rowsSkipped} dilewati`
+        );
+      }
+      if (replacementResults.length) {
+        const rowsReplaced = replacementResults.reduce(
+          (sum, item) => sum + (item.rows_replaced || 0),
+          0
+        );
+        const resultRowsReplaced = replacementResults.reduce(
+          (sum, item) => sum + (item.result_rows_replaced || 0),
+          0
+        );
+        const resultRowsAppended = replacementResults.reduce(
+          (sum, item) => sum + (item.result_rows_appended || 0),
+          0
+        );
+        messageParts.push(
+          `Periode lama diganti: ${rowsReplaced} baris Master dan ${resultRowsReplaced} baris hasil lama dihapus; ${rowsAppended} baris Master dan ${resultRowsAppended} baris hasil baru disimpan`
+        );
+      }
+      if (pendingSheets.length) {
+        messageParts.push(`${pendingSheets.length} sheet perlu ditinjau`);
+      }
+      if (autoErrors.length) {
+        messageParts.push(`Gagal otomatis: ${autoErrors.join("; ")}`);
+      }
       const res = {
-        ...confirmed,
         ...updatedPrepared,
         status: updatedPrepared.status,
-        batch_status: confirmed.batch_status || updatedPrepared.status,
+        batch_status: updatedPrepared.status,
         sheet: selectedSheet,
-        total_rows: sheet.total_rows,
-        total_columns: sheet.headers.length,
+        total_rows: updatedSheets.reduce(
+          (sum, item) => sum + (item.status === "ready" ? item.total_rows || 0 : 0),
+          0
+        ),
+        total_columns: updatedSheets.reduce(
+          (sum, item) => sum + (item.headers?.length || 0),
+          0
+        ),
         total_headers_stored: updatedSheets.reduce(
           (total, item) => total + (item.headers?.length || 0),
           0
         ),
+        rows_appended: updatedSheets.reduce((sum, item) => sum + (item.rows_appended || 0), 0),
+        rows_updated: updatedSheets.reduce((sum, item) => sum + (item.rows_updated || 0), 0),
+        rows_skipped: updatedSheets.reduce((sum, item) => sum + (item.rows_skipped || 0), 0),
+        skipped_sheets: skippedSheets,
         pending_sheets: pendingSheets,
-        message: pendingSheets.length
-          ? `${resultMessage} ${pendingSheets.length} sheet lain masih menunggu konfirmasi mapping.`
-          : resultMessage,
+        message: `${messageParts.join(". ")}.`,
       };
       setUploadResult(res);
       setCurrentStep("SUCCESS");
@@ -553,6 +698,15 @@ export default function ComparePage({ onNavigate }) {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleExecuteSave = () => executeUpload();
+
+  const handleSkipSelectedSheet = () => {
+    if (!window.confirm(`Tandai sheet "${selectedSheet}" sebagai tidak dipakai?`)) {
+      return;
+    }
+    executeUpload({ skipSelected: true });
   };
 
   const handleContinueNextSheet = () => {
@@ -1326,17 +1480,26 @@ export default function ComparePage({ onNavigate }) {
             <div className="flex flex-col items-end gap-2">
               {missingRequiredTargets.length > 0 && (
                 <p className="text-xs font-semibold text-rose-600" role="status">
-                  Petakan field wajib: {missingRequiredTargets.map((target) => target.label).join(", ")}.
+                  Sheet ini belum lengkap. Sheet lain yang cocok tetap diproses; sheet yang perlu mapping masuk Perlu Ditinjau.
                 </p>
               )}
-              <Button
-                variant="primary"
-                icon={ArrowRightIcon}
-                disabled={submitting || missingRequiredTargets.length > 0}
-                onClick={handleExecuteSave}
-              >
-                Process &amp; Save Data ({sheetRowCount.toLocaleString("id-ID")} Rows)
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={submitting}
+                  onClick={handleSkipSelectedSheet}
+                >
+                  Tandai Tidak Dipakai
+                </Button>
+                <Button
+                  variant="primary"
+                  icon={ArrowRightIcon}
+                  disabled={submitting}
+                  onClick={handleExecuteSave}
+                >
+                  Proses Semua Sheet
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -1394,7 +1557,7 @@ export default function ComparePage({ onNavigate }) {
             <div className="space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-[var(--text-title)] font-bold text-[var(--color-ink)] tracking-tight">
-                  Data Berhasil Diproses &amp; Disimpan
+                  Hasil Pemrosesan Upload
                 </h2>
                 <Badge tone="valid" dot>
                   Job #{uploadResult.job_id}
@@ -1406,6 +1569,18 @@ export default function ComparePage({ onNavigate }) {
               <p className="text-xs text-[var(--color-ink-muted)]">
                 {uploadResult.message}
               </p>
+              {uploadResult.pending_sheets?.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-amber-700">
+                  {uploadResult.pending_sheets.map((sheet) => (
+                    <li key={sheet.table_id}>
+                      {sheet.sheet_name}: {sheet.error_message
+                        || (sheet.missing_fields?.length
+                          ? `Belum dipetakan: ${sheet.missing_fields.join(", ")}`
+                          : "Mapping perlu ditinjau.")}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
 

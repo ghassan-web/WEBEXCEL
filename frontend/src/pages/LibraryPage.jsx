@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import {
   getHeaderLibrary,
   getLibrary,
+  getMasterUploadTableMapping,
+  confirmMasterUploadMapping,
+  skipMasterUploadSheet,
   deleteLibraryEntry,
   getMasterData,
 } from "../services/api";
-import { PageHeader, Card, Button, Badge, MetricTile } from "../components/ui";
+import { Badge, Button, Card, MetricTile, PageHeader } from "../components/ui";
 import {
   BookOpenIcon,
   ArrowPathIcon,
@@ -31,6 +34,186 @@ const STATUS_STYLE = {
 };
 const STATUS_LABEL = { done:"SUCCESS", processing:"PROCESSING", error:"ERROR", pending:"PENDING" };
 const STATUS_DOT   = { done:"bg-[var(--color-valid)]", processing:"bg-[var(--color-warning)] animate-pulse", error:"bg-[var(--color-danger)]", pending:"bg-[var(--color-ink-faint)]" };
+const FIELD_LABELS = {
+  loss_ref: "Loss Ref",
+  doc_no: "Loss Ref",
+  outstanding: "Outstanding",
+  dol: "DOL",
+  gross: "Gross",
+  currency: "Currency",
+  insured: "Insured",
+  class_code: "Class Code",
+  cob: "COB",
+  tsi: "TSI",
+  title: "Title",
+  value: "Value",
+};
+
+function ReviewUploadModal({
+  file,
+  pendingSheets,
+  selectedSheet,
+  mappingData,
+  mapping,
+  loading,
+  saving,
+  error,
+  onSelectSheet,
+  onChangeMapping,
+  onConfirm,
+  onSkip,
+  onClose,
+}) {
+  const fields = (mappingData?.field_catalog || []).filter(
+    (field) => field.default_source === "column" || field.candidate_headers?.length
+  );
+  const missingRequired = fields.some(
+    (field) => field.required && !mapping?.[field.field_name]
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-upload-title"
+        className="bg-[var(--color-surface)] rounded-[var(--radius-surface)] shadow-[var(--shadow-overlay)] border border-[var(--color-line)] w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+      >
+        <div className="px-5 py-4 border-b border-[var(--color-line)] flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 id="review-upload-title" className="text-sm font-bold text-[var(--color-ink)]">
+              Tinjau Upload
+            </h2>
+            <p className="text-xs text-[var(--color-ink-muted)] mt-1 truncate" title={file.file_name}>
+              {file.file_name}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="text-xs font-semibold text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:opacity-50"
+          >
+            Tutup
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {pendingSheets.length > 1 && (
+            <div className="flex flex-wrap gap-2">
+              {pendingSheets.map((sheet) => (
+                <button
+                  key={sheet.table_id}
+                  type="button"
+                  onClick={() => onSelectSheet(sheet)}
+                  disabled={saving || loading}
+                  className={`px-3 py-1.5 rounded-[var(--radius-control)] text-xs font-semibold border ${
+                    selectedSheet?.table_id === sheet.table_id
+                      ? "bg-[var(--color-brand)] text-white border-[var(--color-brand)]"
+                      : "bg-[var(--color-surface-sunken)] text-[var(--color-ink-body)] border-[var(--color-line)]"
+                  }`}
+                >
+                  {sheet.sheet_name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedSheet && (
+            <div className="bg-[var(--color-warning-soft)] border border-[var(--color-warning)]/25 rounded-[var(--radius-control)] px-3 py-2 text-xs text-[var(--color-ink-body)]">
+              Sheet <strong>{selectedSheet.sheet_name}</strong> belum selesai. Petakan field wajib atau tandai sheet tidak dipakai.
+            </div>
+          )}
+
+          {loading && (
+            <div className="py-10 text-center text-xs text-[var(--color-ink-muted)] animate-pulse">
+              Memuat mapping sheet...
+            </div>
+          )}
+
+          {!loading && mappingData && (
+            <>
+              {mappingData.total_rows === 0 && (
+                <p className="text-xs text-[var(--color-ink-muted)]">
+                  Sheet ini tidak memiliki baris data.
+                </p>
+              )}
+              <div className="space-y-3">
+                {fields.map((field) => {
+                  const candidates = field.candidate_headers || [];
+                  const selected = candidates.find(
+                    (candidate) => candidate.header === mapping?.[field.field_name]
+                  );
+                  return (
+                    <label key={field.field_name} className="block">
+                      <span className="flex items-center gap-2 text-xs font-semibold text-[var(--color-ink)] mb-1.5">
+                        {FIELD_LABELS[field.field_name]
+                          || field.field_name.replace(/_/g, " ")}
+                        {field.required && (
+                          <span className="text-[var(--color-danger)]">Wajib</span>
+                        )}
+                      </span>
+                      <select
+                        value={mapping?.[field.field_name] || ""}
+                        onChange={(event) => onChangeMapping(field.field_name, event.target.value)}
+                        disabled={saving}
+                        className="w-full h-9 px-3 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] bg-[var(--color-surface)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20"
+                      >
+                        <option value="">-- Pilih header sumber --</option>
+                        {candidates.map((candidate) => (
+                          <option key={candidate.header} value={candidate.header}>
+                            {candidate.header}
+                          </option>
+                        ))}
+                      </select>
+                      {selected?.sample_values?.length > 0 && (
+                        <span className="block mt-1 text-[10px] text-[var(--color-ink-muted)] truncate">
+                          Contoh: {selected.sample_values.slice(0, 3).join(", ")}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+              {missingRequired && (
+                <p className="text-xs text-[var(--color-danger)]">
+                  Semua field wajib harus dipetakan sebelum sheet diproses.
+                </p>
+              )}
+            </>
+          )}
+
+          {error && (
+            <p role="alert" className="text-xs text-[var(--color-danger)]">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-[var(--color-line)] flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Batal
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={onSkip}
+            disabled={saving || loading || !selectedSheet}
+          >
+            Tandai Tidak Dipakai
+          </Button>
+          <Button
+            variant="primary"
+            onClick={onConfirm}
+            loading={saving}
+            disabled={loading || !mappingData || missingRequired}
+          >
+            Simpan & Proses
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ── confirm modal ── */
 function ConfirmModal({ file, onConfirm, onCancel, loading }) {
@@ -215,7 +398,12 @@ function HeaderLibraryView({ activeTab }) {
                   {header.original_header}
                 </td>
                 <td className="px-4 py-2.5 text-[var(--color-ink-muted)]">
-                  {header.mapping_version ?? "Belum dikonfirmasi"}
+                  {header.mapping_version
+                    ?? (header.upload_status === "skipped"
+                      ? "Tidak dipakai"
+                      : header.upload_status === "needs_review"
+                        ? "Perlu ditinjau"
+                        : "Belum dikonfirmasi")}
                 </td>
                 <td className="px-4 py-2.5 text-[var(--color-ink-muted)] whitespace-nowrap">
                   {header.uploaded_at
@@ -280,6 +468,13 @@ export default function LibraryPage({ initialTab }) {
   const [loading,     setLoading]     = useState(false);
   const [deleting,    setDeleting]    = useState(false);
   const [confirmFile, setConfirmFile] = useState(null);
+  const [reviewFile, setReviewFile] = useState(null);
+  const [reviewSheet, setReviewSheet] = useState(null);
+  const [reviewData, setReviewData] = useState(null);
+  const [reviewMapping, setReviewMapping] = useState({});
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewError, setReviewError] = useState("");
   const [toast,       setToast]       = useState(null);
   const [error,       setError]       = useState(null);
 
@@ -323,6 +518,69 @@ export default function LibraryPage({ initialTab }) {
       showToast(e.message, "error");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const loadReviewSheet = async (sheet) => {
+    setReviewSheet(sheet);
+    setReviewData(null);
+    setReviewMapping({});
+    setReviewError("");
+    setReviewLoading(true);
+    try {
+      const result = await getMasterUploadTableMapping(sheet.table_id);
+      setReviewData(result);
+      setReviewMapping(result.suggested_mapping || {});
+    } catch (e) {
+      setReviewError(e.message);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const handleOpenReview = async (file) => {
+    const pendingSheets = file.pending_sheets || [];
+    if (!pendingSheets.length) return;
+    setReviewFile(file);
+    await loadReviewSheet(pendingSheets[0]);
+  };
+
+  const handleFinishReview = async (skip = false) => {
+    if (!reviewFile || !reviewSheet) return;
+    if (
+      skip
+      && !window.confirm(`Tandai sheet "${reviewSheet.sheet_name}" sebagai tidak dipakai?`)
+    ) {
+      return;
+    }
+    setReviewSaving(true);
+    setReviewError("");
+    try {
+      if (skip) {
+        await skipMasterUploadSheet(reviewSheet.table_id);
+      } else {
+        await confirmMasterUploadMapping(reviewSheet.table_id, reviewMapping);
+      }
+
+      const remainingSheets = (reviewFile.pending_sheets || []).filter(
+        (sheet) => sheet.table_id !== reviewSheet.table_id
+      );
+      await load();
+      if (remainingSheets.length) {
+        setReviewFile({ ...reviewFile, pending_sheets: remainingSheets });
+        await loadReviewSheet(remainingSheets[0]);
+      } else {
+        setReviewFile(null);
+        showToast(
+          skip
+            ? "Sheet dilewati. Upload selesai."
+            : "Mapping disimpan. Upload selesai."
+        );
+      }
+    } catch (e) {
+      setReviewError(e.message);
+    } finally {
+      setReviewSaving(false);
     }
   };
 
@@ -506,8 +764,6 @@ export default function LibraryPage({ initialTab }) {
                     <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">File</th>
                     <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Cedant</th>
                     <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Periode</th>
-                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Sheet</th>
-                    <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Primary Key</th>
                     <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-brand)] uppercase tracking-wider">Ditambahkan</th>
                     <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Dilewati</th>
                     <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider">Total Baris</th>
@@ -518,11 +774,11 @@ export default function LibraryPage({ initialTab }) {
                 </thead>
                 <tbody className="divide-y divide-[var(--color-line)]/60">
                   {loading && (
-                    <tr><td colSpan={11} className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse">Memuat…</td></tr>
+                    <tr><td colSpan={9} className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse">Memuat…</td></tr>
                   )}
                   {!loading && filtered.length === 0 && (
                     <tr>
-                      <td colSpan={11} className="text-center py-16">
+                      <td colSpan={9} className="text-center py-16">
                         <div className="flex flex-col items-center gap-2 text-[var(--color-ink-muted)]">
                           <BookOpenIcon className="h-10 w-10 text-[var(--color-ink-faint)]" />
                           <p className="font-semibold text-[var(--color-ink)]">Library kosong</p>
@@ -548,14 +804,6 @@ export default function LibraryPage({ initialTab }) {
                         {f.bulan && f.tahun ? (
                           <Badge tone="brand">{f.bulan}/{f.tahun}</Badge>
                         ) : <span className="text-[var(--color-ink-faint)]">—</span>}
-                      </td>
-                      <td className="px-4 py-2.5 text-[var(--color-ink-muted)] whitespace-nowrap">
-                        {f.sheet_name || <span className="text-[var(--color-ink-faint)] italic">Default</span>}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <code className="text-[11px] bg-[var(--color-surface-sunken)] border border-[var(--color-line)] text-[var(--color-ink-body)] px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
-                          {f.primary_key_col}
-                        </code>
                       </td>
                       <td className="px-4 py-2.5 text-right font-semibold font-mono text-[var(--color-brand)]">
                         {f.rows_appended?.toLocaleString("id-ID") ?? "—"}
@@ -586,6 +834,16 @@ export default function LibraryPage({ initialTab }) {
                             <span className="text-[10px] text-[var(--color-danger)] italic max-w-[100px] truncate" title={f.error_message}>
                               {f.error_message?.slice(0, 30)}
                             </span>
+                          )}
+                          {f.pending_sheets?.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReview(f)}
+                              className="px-2 py-1 rounded-[var(--radius-control)] text-[10px] font-bold text-[var(--color-warning)] border border-[var(--color-warning)]/30 hover:bg-[var(--color-warning-soft)] transition-colors"
+                              title="Tinjau sheet yang belum selesai"
+                            >
+                              Tinjau ({f.pending_sheets.length})
+                            </button>
                           )}
                           <button
                             type="button"
@@ -644,6 +902,33 @@ export default function LibraryPage({ initialTab }) {
       )}
 
       {/* Confirm delete modal */}
+      {reviewFile && (
+        <ReviewUploadModal
+          file={reviewFile}
+          pendingSheets={reviewFile.pending_sheets || []}
+          selectedSheet={reviewSheet}
+          mappingData={reviewData}
+          mapping={reviewMapping}
+          loading={reviewLoading}
+          saving={reviewSaving}
+          error={reviewError}
+          onSelectSheet={loadReviewSheet}
+          onChangeMapping={(fieldName, header) => {
+            setReviewMapping((current) => {
+              const next = { ...current };
+              if (header) next[fieldName] = header;
+              else delete next[fieldName];
+              return next;
+            });
+          }}
+          onConfirm={() => handleFinishReview(false)}
+          onSkip={() => handleFinishReview(true)}
+          onClose={() => {
+            if (!reviewSaving) setReviewFile(null);
+          }}
+        />
+      )}
+
       {confirmFile && (
         <ConfirmModal
           file={confirmFile}

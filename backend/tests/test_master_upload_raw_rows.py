@@ -1,9 +1,12 @@
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
 from app.routers.master import (
+    _auto_mapping_for_catalog,
+    _auto_confirm_mapped_sheets,
     _auto_match_headers_for_sheet,
     _build_workflow_cedant_row,
     _build_os_mapping_profiles,
@@ -15,13 +18,270 @@ from app.routers.master import (
     _load_column_mapping,
     _build_mapping_version_profiles,
     _normalize_manual_mapping,
+    _master_raw_row_lookup_key,
+    _library_pending_sheets,
+    _parse_dol,
     _raw_primary_key,
     _replace_cedant_master_period,
     _write_cedant_rows,
     add_mapping_version,
     get_column_mappings,
     get_master_data,
+    skip_upload_table,
 )
+
+
+class DolParsingTests(unittest.TestCase):
+    def test_extracts_date_from_aon_trans_desc_dol_value(self):
+        self.assertEqual(
+            _parse_dol("PT Buana Megah / DOL 28/04/2021"),
+            date(2021, 4, 28),
+        )
+
+    def test_parses_aon_dol_with_dashes(self):
+        self.assertEqual(
+            _parse_dol("PT Gokak Indonesia / DOL 29-12-2023"),
+            date(2023, 12, 29),
+        )
+
+    def test_extracts_date_when_description_has_no_dol_label(self):
+        self.assertEqual(
+            _parse_dol("5/27/2024, CV Mandiri Sejahtera Indonesia"),
+            date(2024, 5, 27),
+        )
+
+    def test_extracts_month_name_date_from_description(self):
+        self.assertEqual(
+            _parse_dol("Reinstatement @ 17-Jan-24"),
+            date(2024, 1, 17),
+        )
+
+
+class AutoConfirmMappedSheetsTests(unittest.TestCase):
+    def test_attempts_each_complete_sheet_and_keeps_failures_for_review(self):
+        sheets = [
+            {
+                "table_id": 1,
+                "status": "needs_review",
+                "mapping_complete": True,
+                "suggested_mapping": {"loss_ref": "Claim"},
+            },
+            {
+                "table_id": 2,
+                "status": "needs_review",
+                "mapping_complete": False,
+                "suggested_mapping": {},
+            },
+            {
+                "table_id": 3,
+                "status": "skipped",
+                "mapping_complete": True,
+                "suggested_mapping": {"loss_ref": "Claim"},
+            },
+            {
+                "table_id": 4,
+                "status": "needs_review",
+                "mapping_complete": True,
+                "suggested_mapping": {"loss_ref": "Claim"},
+            },
+        ]
+        confirmed = {
+            "mapping_version": 8,
+            "rows_appended": 2,
+            "rows_updated": 1,
+            "rows_skipped": 0,
+        }
+
+        with patch(
+            "app.routers.master.confirm_upload_table_mapping",
+            side_effect=[confirmed, HTTPException(status_code=422, detail="Invalid row")],
+        ) as confirm:
+            _auto_confirm_mapped_sheets(None, "session-1", sheets)
+
+        self.assertEqual([call.args[0] for call in confirm.call_args_list], [1, 4])
+        self.assertEqual(sheets[0]["status"], "ready")
+        self.assertEqual(sheets[0]["rows_appended"], 2)
+        self.assertEqual(sheets[1]["status"], "needs_review")
+        self.assertEqual(sheets[2]["status"], "skipped")
+        self.assertEqual(sheets[3]["status"], "needs_review")
+        self.assertEqual(sheets[3]["error_message"], "Invalid row")
+
+
+class MappingRulePrecedenceTests(unittest.TestCase):
+    def test_auto_match_does_not_guess_when_rule_header_is_missing(self):
+        mapping = _auto_match_headers_for_sheet(
+            ["Policy No", "ORC AMT"],
+            False,
+            {"doc_no": "Invoice No", "outstanding": "ORC AMT"},
+        )
+
+        self.assertNotIn("doc_no", mapping)
+        self.assertEqual(mapping["outstanding"], "ORC AMT")
+
+    def test_prepare_keeps_loss_ref_unmapped_when_rule_header_is_missing(self):
+        mapping = _auto_mapping_for_catalog(
+            ["Policy No"],
+            "OS CEDANT",
+            [{"field_name": "loss_ref", "default_source": "column"}],
+            protected_fields={"loss_ref"},
+        )
+
+        self.assertNotIn("loss_ref", mapping)
+
+    def test_prepare_uses_rule_header_when_present(self):
+        mapping = _auto_mapping_for_catalog(
+            ["Invoice No", "Policy No"],
+            "OS CEDANT",
+            [{"field_name": "loss_ref", "default_source": "column"}],
+            {"loss_ref": "INVOICE NO"},
+            {"loss_ref"},
+        )
+
+        self.assertEqual(mapping["loss_ref"], "Invoice No")
+
+
+class LibraryPendingSheetsTests(unittest.TestCase):
+    def test_groups_only_pending_sheets_for_requested_jobs(self):
+        class FakeRows:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return [
+                    {
+                        "job_id": 12,
+                        "table_id": 121,
+                        "sheet_name": "Claims",
+                        "error_message": None,
+                    },
+                    {
+                        "job_id": 99,
+                        "table_id": 991,
+                        "sheet_name": "Other session",
+                        "error_message": None,
+                    },
+                    {
+                        "job_id": 12,
+                        "table_id": 122,
+                        "sheet_name": "Summary",
+                        "error_message": "Mapping belum lengkap",
+                    },
+                ]
+
+            def __iter__(self):
+                return iter(self.all())
+
+        class FakeDatabase:
+            def execute(self, query, params):
+                self.params = params
+                return FakeRows()
+
+        database = FakeDatabase()
+        result = _library_pending_sheets(database, "session-1", [12])
+
+        self.assertEqual(database.params["session_id"], "session-1")
+        self.assertEqual(
+            result,
+            {
+                12: [
+                    {
+                        "table_id": 121,
+                        "sheet_name": "Claims",
+                        "error_message": None,
+                    },
+                    {
+                        "table_id": 122,
+                        "sheet_name": "Summary",
+                        "error_message": "Mapping belum lengkap",
+                    },
+                ]
+            },
+        )
+
+
+class UploadTableSkipTests(unittest.TestCase):
+    def test_skipping_last_pending_sheet_completes_its_batch_and_job(self):
+        context = {
+            "table_id": 12,
+            "batch_id": 7,
+            "table_status": "needs_review",
+            "batch_status": "needs_review",
+            "applied_mapping": {"mapping": {}, "__job_id": 3},
+        }
+
+        class FakeResult:
+            def __init__(self, row=None, scalar_value=None):
+                self.row = row
+                self.scalar_value = scalar_value
+
+            def mappings(self):
+                return self
+
+            def first(self):
+                return self.row
+
+            def scalar_one(self):
+                return self.scalar_value
+
+        class FakeJob:
+            status = "processing"
+
+        class FakeDatabase:
+            def __init__(self):
+                self.statements = []
+                self.job = FakeJob()
+                self.committed = False
+
+            def execute(self, query, parameters=None):
+                query_text = str(query)
+                self.statements.append((query_text, parameters))
+                if "SELECT t.table_id, t.batch_id" in query_text:
+                    return FakeResult(row=context)
+                if "SELECT COUNT(*) FROM rekonsiliasi.upload_table" in query_text:
+                    return FakeResult(scalar_value=0)
+                return FakeResult()
+
+            def get(self, _model, _job_id):
+                return self.job
+
+            def commit(self):
+                self.committed = True
+
+            def rollback(self):
+                raise AssertionError("Unexpected rollback")
+
+        database = FakeDatabase()
+
+        result = skip_upload_table(12, database, "session-1")
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["batch_status"], "ready")
+        self.assertEqual(database.job.status, "done")
+        self.assertTrue(database.committed)
+        self.assertTrue(
+            any(
+                "SET status = 'skipped'" in query
+                for query, _ in database.statements
+            )
+        )
+
+
+class MasterRawRowLookupKeyTests(unittest.TestCase):
+    def test_scopes_same_claim_to_its_upload_file_and_period(self):
+        raw_rows = {
+            _master_raw_row_lookup_key("LC011", "CLM-1", "Claims", "january.xlsx", 1, 2025): {
+                "source": "January upload"
+            },
+            _master_raw_row_lookup_key("LC011", "CLM-1", "Claims", "february.xlsx", 2, 2025): {
+                "source": "February upload"
+            },
+        }
+
+        key = _master_raw_row_lookup_key(
+            "LC011", "CLM-1", "Claims", "february.xlsx", 2, 2025
+        )
+
+        self.assertEqual(raw_rows[key]["source"], "February upload")
 
 
 class RawPrimaryKeyTests(unittest.TestCase):
@@ -333,6 +593,112 @@ class WorkflowCedantValidationTests(unittest.TestCase):
 
 
 class CedantMappingProfileTests(unittest.TestCase):
+    def test_infopack_mapping_loader_reads_its_dedicated_table(self):
+        class FakeResult:
+            def __init__(self, rows=None):
+                self.rows = rows or []
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, query, *_args, **_kwargs):
+                query_text = str(query)
+                self.queries.append(query_text)
+                if "master_mapping_column_infopack" in query_text:
+                    return FakeResult(
+                        [
+                            {
+                                "excel_name": "Gross Amount",
+                                "field_name": "gross",
+                                "argument": {"sheet_names": ["Claims"]},
+                                "mapping_version": 2,
+                            }
+                        ]
+                    )
+                return FakeResult()
+
+        database = FakeDatabase()
+
+        result = _load_column_mapping(database, "LC011", "Claims", True)
+
+        self.assertEqual(result["gross"], "Gross Amount")
+        self.assertTrue(
+            any("FROM rekonsiliasi.master_mapping_column_infopack" in query
+                for query in database.queries)
+        )
+
+    def test_add_infopack_mapping_version_inserts_into_dedicated_table(self):
+        catalog = [
+            {
+                "field_id": 81,
+                "field_name": "gross",
+                "default_source": "column",
+            },
+        ]
+
+        class FakeResult:
+            def __init__(self, rows=None, scalar_value=None):
+                self.rows = rows or []
+                self.scalar_value = scalar_value
+
+            def first(self):
+                return self.rows[0] if self.rows else None
+
+            def mappings(self):
+                return self
+
+            def scalar(self):
+                return self.scalar_value
+
+            def __iter__(self):
+                return iter(self.rows)
+
+        class FakeDatabase:
+            def __init__(self):
+                self.inserted_table = None
+
+            def execute(self, query, parameters=None):
+                query_text = str(query)
+                if "SELECT cedant_code FROM rekonsiliasi.master_oscedant_code" in query_text:
+                    return FakeResult([("LC011",)])
+                if "SELECT field_id, field_name" in query_text:
+                    return FakeResult(catalog)
+                if "SELECT MAX(m.mapping_version)" in query_text:
+                    return FakeResult(scalar_value=3)
+                if "SELECT MAX(t.mapping_version)" in query_text:
+                    return FakeResult(scalar_value=4)
+                if "INSERT INTO rekonsiliasi.master_mapping_column_infopack" in query_text:
+                    self.inserted_table = "infopack"
+                return FakeResult()
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+        database = FakeDatabase()
+        result = add_mapping_version(
+            {
+                "cedant_code": "LC011",
+                "dataset_type": "Infopack",
+                "sheet_names": ["Claims"],
+                "mapping": {"gross": "Gross Amount"},
+            },
+            database,
+            "session-1",
+        )
+
+        self.assertEqual(result["mapping_version"], 5)
+        self.assertEqual(database.inserted_table, "infopack")
+
     def test_database_dataset_type_keeps_os_insured_mapping_in_os_profiles(self):
         os_rows = [
             {

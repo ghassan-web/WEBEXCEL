@@ -189,9 +189,18 @@ export async function uploadToMaster(formData, onProgress) {
   return xhrUpload(`${BASE_URL}/api/master/upload`, formData, onProgress);
 }
 
-/** POST /api/master/prepare — archive a selected sheet and its raw rows for mapping review. */
+/** POST /api/master/prepare — archive all sheets and auto-process complete mappings. */
 export async function prepareMasterUpload(formData, onProgress) {
   return xhrUpload(`${BASE_URL}/api/master/prepare`, formData, onProgress);
+}
+
+/** GET /api/master/tables/:tableId/mapping — load a pending sheet for review. */
+export async function getMasterUploadTableMapping(tableId) {
+  const res = await fetch(
+    `${BASE_URL}/api/master/tables/${tableId}/mapping`,
+    { headers: sessionHeaders() },
+  );
+  return handleResponse(res);
 }
 
 /** POST /api/master/tables/:tableId/confirm — save the confirmed mapping and normalized rows. */
@@ -200,6 +209,15 @@ export async function confirmMasterUploadMapping(tableId, mapping) {
     method: "POST",
     headers: sessionHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ mapping }),
+  });
+  return handleResponse(res);
+}
+
+/** POST /api/master/tables/:tableId/skip — mark an unused sheet as skipped. */
+export async function skipMasterUploadSheet(tableId) {
+  const res = await fetch(`${BASE_URL}/api/master/tables/${tableId}/skip`, {
+    method: "POST",
+    headers: sessionHeaders(),
   });
   return handleResponse(res);
 }

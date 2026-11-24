@@ -32,7 +32,7 @@ const WORKFLOW_STEPS = [
   {
     step: "03",
     title: "2-Phase Prepare & Confirm",
-    desc: "Tahap Prepare memvalidasi kolom & menampilkan preview baris. Setelah diperiksa, Tahap Confirm menyimpan data terstandarisasi ke tabel hasil_rekonsiliasi sekaligus mengarsipkan seluruh kolom asli dalam raw JSON.",
+    desc: "Tahap Prepare memvalidasi kolom & menampilkan preview baris. Setelah diperiksa, Tahap Confirm menyimpan data ke header hasil dari mapping pertama per field, mencocokkan alias upload berikutnya ke header yang sama tanpa menambah kolom baru, sekaligus mengarsipkan seluruh kolom asli dalam raw JSON.",
     icon: CheckCircleIcon,
     target: "upload",
     actionLabel: "Mulai Upload",
@@ -170,7 +170,7 @@ export default function UserGuidePage({ onNavigate }) {
         {activeTab === "mapping" && (
           <Card
             title="Aturan Pemetaan Kolom & Penyimpanan Database"
-            description="Mekanisme pembacaan profil dari rekonsiliasi.master_mapping_column dan penyimpanan dual-layer ke hasil_rekonsiliasi."
+            description="Mekanisme pembacaan profil mapping OS Cedant/Infopack dan penyimpanan data hasil upload."
           >
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -182,7 +182,7 @@ export default function UserGuidePage({ onNavigate }) {
                     </span>
                   </div>
                   <p className="text-[var(--color-ink-muted)] text-xs leading-relaxed">
-                    Setiap aturan pada <code className="font-mono text-[var(--color-ink)]">rekonsiliasi.master_mapping_column</code> memetakan nama sheet pada kolom <code className="font-mono text-[var(--color-ink)]">argument</code> ke field target seperti <strong>Loss Ref</strong>, <strong>Outstanding</strong>, dan <strong>Date of Loss</strong>. Jika argument kosong, aturan berlaku untuk seluruh sheet.
+                    Aturan OS Cedant dibaca dari <code className="font-mono text-[var(--color-ink)]">rekonsiliasi.master_mapping_column</code>, sedangkan Infopack dari <code className="font-mono text-[var(--color-ink)]">rekonsiliasi.master_mapping_column_infopack</code>. Aturan memetakan nama sheet pada <code className="font-mono text-[var(--color-ink)]">argument</code> ke field target; jika daftar sheet kosong, aturan berlaku untuk semua sheet.
                   </p>
                 </div>
 
@@ -201,17 +201,17 @@ export default function UserGuidePage({ onNavigate }) {
 
               <div className="p-5 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface-sunken)] space-y-3 text-[13px]">
                 <h4 className="font-semibold text-[var(--color-ink)]">
-                  Alur Upload 2-Tahap (Prepare &rarr; Confirm):
+                  Alur Upload Multi-Sheet:
                 </h4>
                 <ol className="list-decimal pl-5 space-y-2 text-xs text-[var(--color-ink-muted)] leading-relaxed">
                   <li>
-                    <strong>Prepare (<code className="font-mono">POST /prepare</code>)</strong>: Memindai header seluruh sheet, mencocokkan dengan mapping DB, menyorot field yang belum ditemukan (merah), dan memberi opsi koreksi kolom sebelum commit.
+                    <strong>Prepare (<code className="font-mono">POST /prepare</code>)</strong>: Memindai semua sheet dan mencatatnya per sheet di <code className="font-mono">upload_table</code> dengan status awal.
                   </li>
                   <li>
-                    <strong>Preview &amp; Mapping Audit</strong>: Operator memeriksa hasil deteksi header, sheet terpilih, serta preview sample baris sebelum data masuk database.
+                    Jika mapping field wajib cocok dan lengkap, sheet diproses otomatis dan menjadi <code className="font-mono">ready</code>. Jika belum lengkap, sheet menunggu pemeriksaan dengan status <code className="font-mono">needs_review</code>; operator dapat memperbaiki mapping atau menandainya <code className="font-mono">skipped</code> bila tidak dipakai.
                   </li>
                   <li>
-                    <strong>Confirm (<code className="font-mono">POST /confirm</code>)</strong>: Menyimpan batch final ke tabel Master <code className="font-mono">hasil_rekonsiliasi</code>, mencatat file di Library, dan merekam Activity Log ber-timestamp WIB.
+                    Hanya sheet <code className="font-mono">ready</code> yang masuk ke Master. Sheet <code className="font-mono">skipped</code> tetap tercatat untuk audit, dan batch selesai setelah seluruh sheet berstatus <code className="font-mono">ready</code> atau <code className="font-mono">skipped</code>.
                   </li>
                 </ol>
               </div>

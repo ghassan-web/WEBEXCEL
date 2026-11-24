@@ -3,9 +3,9 @@ import {
   getHeaderLibrary,
   getLibrary,
   deleteLibraryEntry,
+  deleteLibraryEntries,
   getMasterData,
 } from "../services/api";
-import { PageHeader, Card, Button, Badge, MetricTile } from "../components/ui";
 import {
   BookOpenIcon,
   ArrowPathIcon,
@@ -231,36 +231,82 @@ function HeaderLibraryView({ activeTab }) {
         </table>
       </div>
 
-      {totalPages > 1 && (
-        <div className="px-5 py-3 bg-[var(--color-surface-sunken)] border-t border-[var(--color-line)] flex items-center justify-between">
-          <span className="text-xs text-[var(--color-ink-muted)]">
-            {page * HEADER_PAGE_SIZE + 1}–{Math.min((page + 1) * HEADER_PAGE_SIZE, data.total)} dari{" "}
-            {data.total.toLocaleString("id-ID")} header
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((current) => Math.max(0, current - 1))}
-              disabled={page === 0 || loading}
-              className="p-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)]"
-              aria-label="Halaman sebelumnya"
-            >
-              <ChevronLeftIcon className="h-3.5 w-3.5 text-[var(--color-ink-body)]" />
-            </button>
-            <span className="text-xs font-semibold font-mono text-[var(--color-ink)]">{page + 1} / {totalPages}</span>
-            <button
-              type="button"
-              onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
-              disabled={page >= totalPages - 1 || loading}
-              className="p-1.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)]"
-              aria-label="Halaman berikutnya"
-            >
-              <ChevronRightIcon className="h-3.5 w-3.5 text-[var(--color-ink-body)]" />
-            </button>
+        {totalPages > 1 && (
+          <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+            <span className="text-xs text-gray-500">
+              {page * HEADER_PAGE_SIZE + 1}–{Math.min((page + 1) * HEADER_PAGE_SIZE, data.total)} dari{" "}
+              {data.total.toLocaleString("id-ID")} header
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+                disabled={page === 0 || loading}
+                className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50"
+                aria-label="Halaman sebelumnya"
+              >
+                <ChevronLeftIcon className="h-3.5 w-3.5 text-gray-600" />
+              </button>
+              <span className="text-xs font-semibold text-gray-600">{page + 1} / {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
+                disabled={page >= totalPages - 1 || loading}
+                className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-40 hover:bg-teal-50"
+                aria-label="Halaman berikutnya"
+              >
+                <ChevronRightIcon className="h-3.5 w-3.5 text-gray-600" />
+              </button>
+            </div>
+          </div>
+        )}
+      </Card>
+    );
+}
+
+/* ── bulk confirm modal ── */
+function BulkConfirmModal({ count, files, onConfirm, onCancel, loading }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+      <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 max-w-md w-full mx-4">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="h-9 w-9 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+            <TrashIcon className="h-4 w-4 text-red-600" />
+          </div>
+          <div>
+            <p className="font-bold text-gray-800 text-sm">Hapus {count} file dari Library?</p>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+              <strong className="text-gray-700">{count} file</strong> beserta semua baris
+              datanya akan dihapus permanen dari Master.
+            </p>
           </div>
         </div>
-      )}
-    </Card>
+        <div className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 mb-4 max-h-36 overflow-y-auto">
+          <ul className="space-y-1">
+            {files.map(f => (
+              <li key={f.id} className="flex items-center gap-2 text-xs text-gray-600">
+                <DocumentIcon className="h-3.5 w-3.5 text-teal-500 flex-shrink-0" />
+                <span className="truncate">{f.file_name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-700 mb-4">
+          ⚠ Aksi ini tidak dapat dibatalkan.
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} disabled={loading}
+            className="px-4 py-2 text-xs font-semibold text-gray-600 border border-gray-200 bg-white hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-40">
+            Batal
+          </button>
+          <button onClick={onConfirm} disabled={loading}
+            className="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-40 flex items-center gap-1.5">
+            {loading ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> : <TrashIcon className="h-3.5 w-3.5" />}
+            {loading ? "Menghapus…" : `Ya, Hapus ${count} File`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -28,6 +28,7 @@ class MasterOsCedant(Base):
     year        = Column(Integer,     nullable=True)
     file_name   = Column(String,      nullable=True)
     sheet_name  = Column(String,      nullable=True)
+    upload_batch_id = Column(BigInteger, nullable=True)
     created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     def __repr__(self):
@@ -57,6 +58,7 @@ class MasterOsInfopack(Base):
     cob         = Column(String(100),  nullable=True)
     gross       = Column(Numeric(30, 2), nullable=True)
     tsi         = Column(Numeric(30, 2), nullable=True)
+    upload_batch_id = Column(BigInteger, nullable=True)
     created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     def __repr__(self):

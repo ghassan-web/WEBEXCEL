@@ -297,6 +297,12 @@ def _find_header_row(file_bytes: bytes, sheet_name: str, max_scan: int = 40) -> 
     import re as _re
     engine = _get_engine(file_bytes)
     kwargs = {"engine": engine} if engine else {}
+    header_keywords = _re.compile(
+        r"\b(no|code|ref|name|date|amount|curr|type|id|pol|claim|loss|"
+        r"cedant|broker|dol|cob|aging|idr|usd|total|outstanding|balance|"
+        r"status|remark|note|sheet|periode|bulan|tahun|kode|tanggal|jumlah)\b",
+        _re.IGNORECASE,
+    )
 
     try:
         raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name,
@@ -833,38 +839,26 @@ def ingest_excel(
 
     # ── Auto-detect: gunakan kolom pertama jika pk kosong ───────────────
     if not primary_key_col or not primary_key_col.strip():
-        if df.empty or len(df.columns) == 0:
-            raise ValueError("File tidak memiliki kolom — tidak bisa auto-detect primary key.")
+        if df.empty or not len(df.columns):
+            raise ValueError("File tidak memiliki kolom ? tidak bisa auto-detect primary key.")
         primary_key_col = str(df.columns[0])
 
     if _is_composite(primary_key_col):
-        # ── Composite key (e.g. "DOL|COB") ──────────────────────────────
-        try:
-            df = _inject_composite_pk(df, primary_key_col)
-        except ValueError as e:
-            raise ValueError(str(e))
-        pk_col_used = _VIRTUAL_PK
-
+        df = _inject_composite_pk(df, primary_key_col)
+        pk_column = _VIRTUAL_PK
     else:
-        # ── Single key ───────────────────────────────────────────────────
-        if primary_key_col not in df.columns:
-            lower_map = {str(c).strip().lower(): c for c in df.columns}
-            hint = lower_map.get(primary_key_col.strip().lower())
-            if hint:
-                primary_key_col = hint
-            else:
-                raise ValueError(
-                    f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di file. "
-                    f"Kolom tersedia: {list(df.columns)}"
-                )
-        pk_col_used = primary_key_col
+        try:
+            pk_column = _resolve_col(primary_key_col.strip(), [str(column) for column in df.columns])
+        except ValueError as exc:
+            raise ValueError(
+                f"Kolom Primary Key '{primary_key_col}' tidak ditemukan di sheet '{actual_sheet}'. "
+                f"Kolom tersedia: {list(df.columns)}"
+            ) from exc
 
-    # Deduplicate within this file by PK (keep first)
-    df = df.drop_duplicates(subset=[pk_col_used], keep="first")
-
+    df = df.drop_duplicates(subset=[pk_column], keep="first")
     clean_columns = [
-        str(c) for c in df.columns
-        if c != _VIRTUAL_PK and not str(c).strip().lower().startswith("unnamed")
+        str(column) for column in df.columns
+        if column != _VIRTUAL_PK and not str(column).strip().lower().startswith("unnamed")
     ]
 
     column_positions = {
@@ -872,7 +866,7 @@ def ingest_excel(
         for index, column in enumerate(df.columns)
         if column in clean_columns
     }
-    pk_position = list(df.columns).index(pk_col_used)
+    pk_position = list(df.columns).index(pk_column)
     rows = []
     for row in df.itertuples(index=False, name=None):
         filtered_dict = {
@@ -885,12 +879,11 @@ def ingest_excel(
         })
 
     return {
-        "sheet":      actual_sheet,
-        "columns":    clean_columns,
+        "sheet": actual_sheet,
+        "columns": clean_columns,
         "total_rows": len(df),
         "rows":       rows,
     }
-
 
 def ingest_excel_raw(
     file_bytes: bytes,

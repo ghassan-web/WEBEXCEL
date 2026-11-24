@@ -174,6 +174,7 @@ def run_reconciliation(
                 "tsi": str(r.get("tsi")) if r.get("tsi") is not None else "",
                 "month": r.get("month"), "year": r.get("year"),
                 "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
+                "upload_batch_id": r.get("upload_batch_id"),
                 "cedant": r.get("cedant_code"),
             }
         else:
@@ -183,6 +184,7 @@ def run_reconciliation(
                 "outstanding": str(r.get("outstanding") or ""), "currency": r.get("currency"),
                 "month": r.get("month"), "year": r.get("year"),
                 "file_name": r.get("file_name"), "sheet": r.get("sheet_name"),
+                "upload_batch_id": r.get("upload_batch_id"),
                 "cedant": r.get("cedant_code"),
             }
 

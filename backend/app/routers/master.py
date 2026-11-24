@@ -29,7 +29,8 @@ from ..models import (
     ScannedSchema, MasterRawRow,
 )
 from ..services.excel_service import (
-    ingest_excel, ingest_excel_raw, ingest_kbins, inspect_excel_workbook,
+    ingest_excel, ingest_excel_raw, iter_ingest_excel_raw_sheets,
+    ingest_kbins, inspect_excel_workbook,
     get_sheet_names, read_excel_with_password, KBINS_TIPE_DATA,
 )
 from ..services.cedant_result_schema import (
@@ -3399,9 +3400,11 @@ async def prepare_master_upload(
         db.commit()
 
         header_sequence_synchronized = False
-        for selected_sheet in selected_sheets:
+        for selected_sheet, parsed in iter_ingest_excel_raw_sheets(
+            source_bytes,
+            selected_sheets,
+        ):
             sheet_index = available_sheets.index(selected_sheet) + 1
-            parsed = ingest_excel_raw(source_bytes, selected_sheet)
             headers = parsed["columns"]
             if not headers:
                 table_id = db.execute(

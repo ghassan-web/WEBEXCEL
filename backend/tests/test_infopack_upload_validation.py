@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from openpyxl import Workbook
+from openpyxl.styles import PatternFill
 
 from app.services import excel_service
 from app.routers.master import (
@@ -197,6 +198,91 @@ class InfopackUploadValidationTests(unittest.TestCase):
             result["rows"][0]["data"],
             result["rows"][1]["data"],
         )
+
+    def test_raw_ingestion_ignores_trailing_formatted_empty_columns(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Claims"
+        worksheet.append(["Claim No", "Outstanding"])
+        worksheet.append(["C-1", 125])
+        worksheet.cell(row=1, column=500).fill = PatternFill(
+            fill_type="solid",
+            fgColor="FFFFFF",
+        )
+        data = BytesIO()
+        workbook.save(data)
+        inflated_workbook = excel_service.openpyxl.load_workbook(
+            BytesIO(data.getvalue()),
+            read_only=True,
+            data_only=True,
+        )
+        self.assertEqual(inflated_workbook["Claims"].max_column, 500)
+        inflated_workbook.close()
+
+        result = ingest_excel_raw(data.getvalue(), "Claims")
+
+        self.assertEqual(result["columns"], ["Claim No", "Outstanding"])
+        self.assertEqual(result["total_rows"], 1)
+        self.assertEqual(result["rows"][0]["data"], {"Claim No": "C-1", "Outstanding": "125"})
+
+        inspection = excel_service.inspect_excel_workbook(data.getvalue())
+
+        self.assertEqual(inspection["sheet_columns"]["Claims"], ["Claim No", "Outstanding"])
+        self.assertEqual(inspection["sheet_row_counts"]["Claims"], 1)
+        comparison = excel_service.compare_excel(
+            data.getvalue(),
+            data.getvalue(),
+            "Claim No",
+            "Claims",
+            "Claims",
+        )
+        self.assertEqual(comparison["summary"]["matched"], 1)
+
+    def test_raw_ingestion_reuses_workbook_for_multiple_sheets(self):
+        workbook = Workbook()
+        first = workbook.active
+        first.title = "Claims A"
+        first.append(["Claim No", "Amount"])
+        first.append(["A-1", 100])
+        second = workbook.create_sheet("Claims B")
+        second.append(["Claim No", "Amount"])
+        second.append(["B-1", 200])
+        data = BytesIO()
+        workbook.save(data)
+
+        original_loader = excel_service.openpyxl.load_workbook
+        with patch.object(
+            excel_service.openpyxl,
+            "load_workbook",
+            wraps=original_loader,
+        ) as workbook_loader:
+            results = list(
+                excel_service.iter_ingest_excel_raw_sheets(
+                    data.getvalue(),
+                    ["Claims A", "Claims B"],
+                )
+            )
+
+        self.assertEqual(workbook_loader.call_count, 1)
+        self.assertEqual([result["sheet"] for _, result in results], ["Claims A", "Claims B"])
+        self.assertEqual([result["total_rows"] for _, result in results], [1, 1])
+
+    def test_raw_ingestion_preserves_values_beyond_preview_rows(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Claims"
+        worksheet.append(["Claim No", "Amount"])
+        worksheet.append(["C-1", 125])
+        worksheet.cell(row=41, column=500, value="late value")
+        data = BytesIO()
+        workbook.save(data)
+
+        result = ingest_excel_raw(data.getvalue(), "Claims")
+
+        self.assertEqual(len(result["columns"]), 500)
+        self.assertEqual(result["total_rows"], 2)
+        self.assertEqual(result["rows"][-1]["excel_row"], 41)
+        self.assertEqual(result["rows"][-1]["data"]["Unnamed: 499"], "late value")
 
     def test_empty_sheet_returns_no_columns_instead_of_indexing_missing_header(self):
         workbook = unittest.mock.Mock()

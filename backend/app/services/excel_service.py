@@ -17,12 +17,24 @@ import msoffcrypto
 from msoffcrypto.exceptions import InvalidKeyError
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils.cell import column_index_from_string, get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
+
+_WORKSHEET_XML_RE = re.compile(r"xl/worksheets/sheet\d+\.xml")
+_EMPTY_CELL_XML_RE = re.compile(
+    rb'<c\b[^>]*?(?:/>|>\s*(?:<v>\s*</v>\s*)?</c>)',
+    re.DOTALL,
+)
+_CELL_REF_XML_RE = re.compile(rb'<c\b[^>]*?\br="([A-Z]+)(\d+)"')
+_WORKSHEET_DIMENSION_XML_RE = re.compile(
+    rb'<dimension\b[^>]*?\bref="([^"]*)"[^>]*/?>'
+)
+
 
 def _sanitize(val):
     """Convert NaN / inf to None so JSON serialization never fails."""
@@ -35,6 +47,72 @@ def _sanitize(val):
 
 def _row_to_dict(series: pd.Series) -> dict:
     return {k: _sanitize(v) for k, v in series.items()}
+
+
+def _trim_empty_excel_cells(file_bytes: bytes) -> bytes:
+    """Remove style-only cells that inflate XLSX worksheet dimensions."""
+    with ZipFile(BytesIO(file_bytes)) as source:
+        worksheet_infos = [
+            info
+            for info in source.infolist()
+            if _WORKSHEET_XML_RE.fullmatch(info.filename)
+        ]
+        inflated_sheets = []
+        for info in worksheet_infos:
+            with source.open(info) as sheet_xml:
+                prefix = sheet_xml.read(8192)
+            dimension = _WORKSHEET_DIMENSION_XML_RE.search(prefix)
+            if not dimension:
+                continue
+            end_cell = dimension.group(1).split(b":")[-1]
+            match = re.fullmatch(rb"([A-Z]+)(\d+)", end_cell)
+            if not match:
+                continue
+            max_column = column_index_from_string(match.group(1).decode("ascii"))
+            max_row = int(match.group(2))
+            if max_column > 256 or max_row > 10000:
+                inflated_sheets.append(info.filename)
+
+        if not inflated_sheets:
+            return file_bytes
+
+        inflated_sheets = set(inflated_sheets)
+        output = BytesIO()
+        with ZipFile(output, "w") as target:
+            for info in source.infolist():
+                content = source.read(info.filename)
+                if info.filename in inflated_sheets:
+                    content, removed = _EMPTY_CELL_XML_RE.subn(b"", content)
+                    if removed:
+                        cell_refs = _CELL_REF_XML_RE.findall(content)
+                        max_column = max(
+                            (
+                                column_index_from_string(column.decode("ascii"))
+                                for column, _ in cell_refs
+                            ),
+                            default=0,
+                        )
+                        max_row = max(
+                            (int(row) for _, row in cell_refs),
+                            default=0,
+                        )
+                        dimension = (
+                            f"A1:{get_column_letter(max_column)}{max_row}"
+                            if max_column and max_row
+                            else "A1"
+                        ).encode("ascii")
+                        content = _WORKSHEET_DIMENSION_XML_RE.sub(
+                            lambda match: re.sub(
+                                rb'(\bref=")[^"]*(")',
+                                lambda ref: ref.group(1) + dimension + ref.group(2),
+                                match.group(0),
+                                count=1,
+                            ),
+                            content,
+                            count=1,
+                        )
+                target.writestr(info, content)
+        return output.getvalue()
 
 
 # ─────────────────────────────────────────────
@@ -187,6 +265,8 @@ def _open_excel_file(file_bytes: bytes) -> Tuple[pd.ExcelFile, Optional[str]]:
     engine = _get_engine(file_bytes)
 
     if engine:
+        if engine == "openpyxl":
+            file_bytes = _trim_empty_excel_cells(file_bytes)
         return pd.ExcelFile(BytesIO(file_bytes), engine=engine), engine
 
     # Last resort: let pandas auto-detect (very old or unusual format)
@@ -443,6 +523,17 @@ def _read_excel(file_bytes: bytes, sheet_name: Optional[str] = None) -> Tuple[pd
 
 def get_sheet_names(file_bytes: bytes) -> list[str]:
     """Return all sheet names of an Excel workbook. Supports .xlsx, .xls, .xlsb."""
+    if _get_engine(file_bytes) == "openpyxl":
+        workbook = openpyxl.load_workbook(
+            BytesIO(file_bytes),
+            read_only=True,
+            data_only=True,
+        )
+        try:
+            return list(workbook.sheetnames)
+        finally:
+            workbook.close()
+
     xls, _ = _open_excel_file(file_bytes)
     try:
         return list(xls.sheet_names)
@@ -892,6 +983,79 @@ def ingest_excel(
     }
 
 
+def _ingest_excel_raw_openpyxl(workbook, sheet_name: Optional[str]) -> dict:
+    target = (
+        sheet_name
+        if sheet_name and sheet_name in workbook.sheetnames
+        else workbook.sheetnames[0]
+    )
+    worksheet = workbook[target]
+    row_iterator = worksheet.iter_rows(values_only=True)
+    preview_rows = list(islice(row_iterator, 40))
+    if not preview_rows:
+        return {"sheet": target, "columns": [], "total_rows": 0, "rows": []}
+    preview_width = max(
+        (
+            next(
+                (
+                    index + 1
+                    for index in range(len(row) - 1, -1, -1)
+                    if row[index] is not None and str(row[index]).strip()
+                ),
+                0,
+            )
+            for row in preview_rows
+        ),
+        default=0,
+    )
+    if not preview_width:
+        return {"sheet": target, "columns": [], "total_rows": 0, "rows": []}
+    preview_rows = [row[:preview_width] for row in preview_rows]
+    header_row = _select_header_row(pd.DataFrame(preview_rows))
+    header_values = list(preview_rows[header_row])
+    max_data_width = preview_width
+    rows = []
+
+    for source_index, values in enumerate(
+        chain(
+            preview_rows[header_row + 1 :],
+            worksheet.iter_rows(
+                min_row=len(preview_rows) + 1,
+                values_only=True,
+            ),
+        )
+    ):
+        row_width = next(
+            (
+                index + 1
+                for index in range(len(values) - 1, -1, -1)
+                if values[index] is not None and str(values[index]).strip()
+            ),
+            0,
+        )
+        max_data_width = max(max_data_width, row_width)
+        if row_width:
+            rows.append(
+                (header_row + source_index + 2, values[:max_data_width])
+            )
+
+    header_values.extend([None] * (max_data_width - len(header_values)))
+    headers = _excel_header_names(header_values)
+    parsed_rows = []
+    for excel_row, values in rows:
+        row_data = {}
+        for index, header in enumerate(headers):
+            value = _sanitize(values[index] if index < len(values) else None)
+            row_data[header] = str(value) if value is not None else ""
+        parsed_rows.append({"excel_row": excel_row, "data": row_data})
+    return {
+        "sheet": target,
+        "columns": headers,
+        "total_rows": len(parsed_rows),
+        "rows": parsed_rows,
+    }
+
+
 def ingest_excel_raw(
     file_bytes: bytes,
     sheet_name: Optional[str] = None,
@@ -904,54 +1068,14 @@ def ingest_excel_raw(
         else file_bytes
     )
     if _get_engine(source_bytes) == "openpyxl":
+        source_bytes = _trim_empty_excel_cells(source_bytes)
         workbook = openpyxl.load_workbook(
             BytesIO(source_bytes),
             read_only=True,
             data_only=True,
         )
         try:
-            target = (
-                sheet_name
-                if sheet_name and sheet_name in workbook.sheetnames
-                else workbook.sheetnames[0]
-            )
-            row_iterator = workbook[target].iter_rows(values_only=True)
-            preview_rows = list(islice(row_iterator, 40))
-            if not preview_rows:
-                return {
-                    "sheet": target,
-                    "columns": [],
-                    "total_rows": 0,
-                    "rows": [],
-                }
-            header_row = _select_header_row(pd.DataFrame(preview_rows))
-            headers = _excel_header_names(preview_rows[header_row])
-            rows = []
-
-            def row_to_string_values(values) -> dict[str, str]:
-                row_data = {}
-                for index, header in enumerate(headers):
-                    value = _sanitize(values[index] if index < len(values) else None)
-                    row_data[header] = str(value) if value is not None else ""
-                return row_data
-
-            for source_index, values in enumerate(
-                chain(preview_rows[header_row + 1 :], row_iterator)
-            ):
-                row_data = row_to_string_values(values)
-                if any(value != "" for value in row_data.values()):
-                    rows.append(
-                        {
-                            "excel_row": header_row + source_index + 2,
-                            "data": row_data,
-                        }
-                    )
-            return {
-                "sheet": target,
-                "columns": headers,
-                "total_rows": len(rows),
-                "rows": rows,
-            }
+            return _ingest_excel_raw_openpyxl(workbook, sheet_name)
         finally:
             workbook.close()
     df, actual_sheet, header_row = _read_excel_with_header_row(source_bytes, sheet_name)
@@ -975,6 +1099,26 @@ def ingest_excel_raw(
         "total_rows": len(rows),
         "rows": rows,
     }
+
+
+def iter_ingest_excel_raw_sheets(file_bytes: bytes, sheet_names: list[str]):
+    """Read multiple raw sheets while opening an openpyxl workbook only once."""
+    if _get_engine(file_bytes) != "openpyxl":
+        for sheet_name in sheet_names:
+            yield sheet_name, ingest_excel_raw(file_bytes, sheet_name)
+        return
+
+    file_bytes = _trim_empty_excel_cells(file_bytes)
+    workbook = openpyxl.load_workbook(
+        BytesIO(file_bytes),
+        read_only=True,
+        data_only=True,
+    )
+    try:
+        for sheet_name in sheet_names:
+            yield sheet_name, _ingest_excel_raw_openpyxl(workbook, sheet_name)
+    finally:
+        workbook.close()
 
 
 # ─────────────────────────────────────────────

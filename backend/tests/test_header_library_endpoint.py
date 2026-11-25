@@ -25,6 +25,7 @@ class HeaderLibraryEndpointTests(unittest.TestCase):
                     "column_index": 1,
                     "original_header": "Loss Date",
                     "mapping_version": None,
+                    "upload_status": "needs_review",
                     "uploaded_at": None,
                 }
             ]
@@ -54,6 +55,7 @@ class HeaderLibraryEndpointTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["headers"][0]["original_header"], "Loss Date")
         self.assertEqual(result["headers"][0]["mapping_version"], None)
+        self.assertEqual(result["headers"][0]["upload_status"], "needs_review")
         self.assertEqual(len(db.executed), 2)
 
         count_sql, count_params = db.executed[0]
@@ -65,6 +67,7 @@ class HeaderLibraryEndpointTests(unittest.TestCase):
 
         rows_sql, rows_params = db.executed[1]
         self.assertIn("JOIN rekonsiliasi.upload_table", rows_sql)
+        self.assertIn("ut.status AS upload_status", rows_sql)
         self.assertIn("JOIN rekonsiliasi.upload_batch", rows_sql)
         self.assertEqual(rows_params["limit"], 25)
         self.assertEqual(rows_params["skip"], 10)

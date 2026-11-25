@@ -55,6 +55,18 @@ def result_table_name(short_name: str) -> str:
     return name
 
 
+def result_column_name(
+    field_name: str,
+    source_header: str,
+    first_mapping_headers: dict[str, str] | None = None,
+) -> str:
+    canonical_field = {
+        "doc_no": "loss_ref",
+        "title": "insured",
+    }.get(field_name, field_name)
+    return (first_mapping_headers or {}).get(canonical_field) or source_header
+
+
 def sql_type_for_field(data_type: str) -> tuple[str, set[str]]:
     try:
         return FIELD_SQL_TYPES[data_type.strip().lower()]
@@ -80,6 +92,102 @@ def _table_columns(db: Session, table_name: str) -> dict[str, dict]:
         {"table_name": table_name},
     ).mappings()
     return {row["column_name"]: dict(row) for row in rows}
+
+
+def resolve_result_columns(
+    db: Session,
+    *,
+    table_name: str,
+    cedant_code: str,
+    mapping: dict[str, str],
+    catalog: list[dict],
+) -> dict[str, str]:
+    table_exists = db.execute(
+        text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'hasil_rekonsiliasi' AND table_name = :table_name)"
+        ),
+        {"table_name": table_name},
+    ).scalar_one()
+    existing_columns = _table_columns(db, table_name) if table_exists else {}
+
+    history = db.execute(
+        text(
+            "SELECT f.field_name, m.header_name "
+            "FROM rekonsiliasi.master_mapping_column m "
+            "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
+            "WHERE m.cedant_code = :cedant_code "
+            "AND UPPER(BTRIM(f.dataset_type)) = 'OS CEDANT' "
+            "AND f.default_source = 'column' "
+            "AND m.header_name IS NOT NULL "
+            "ORDER BY m.mapping_version ASC, m.column_index ASC NULLS LAST, "
+            "m.mapping_id ASC"
+        ),
+        {"cedant_code": cedant_code},
+    ).mappings()
+    first_mapping_headers: dict[str, str] = {}
+    for row in history:
+        canonical_field = {
+            "doc_no": "loss_ref",
+            "title": "insured",
+        }.get(row["field_name"], row["field_name"])
+        first_mapping_headers.setdefault(canonical_field, row["header_name"])
+
+    fields = {
+        field["field_name"]: field
+        for field in catalog
+        if field.get("default_source") == "column"
+    }
+    resolved: dict[str, str] = {}
+    destination_fields: dict[str, str] = {}
+    for field_name, source_header in mapping.items():
+        if not source_header or field_name == "class_code":
+            continue
+        canonical_field = {
+            "doc_no": "loss_ref",
+            "title": "insured",
+        }.get(field_name, field_name)
+        field = fields.get(canonical_field)
+        if not field:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Field mapping '{field_name}' tidak memiliki definisi kolom hasil.",
+            )
+
+        result_header = result_column_name(
+            field_name,
+            source_header,
+            first_mapping_headers,
+        )
+        if len(result_header) > 63 or result_header.casefold() in {
+            name.casefold() for name in RESULT_METADATA_COLUMNS
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Header hasil '{result_header}' tidak dapat digunakan.",
+            )
+        if table_exists and result_header not in existing_columns:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Kolom hasil pertama '{result_header}' untuk field "
+                    f"'{canonical_field}' belum tersedia di "
+                    f"hasil_rekonsiliasi.{table_name}; tidak dibuat kolom baru."
+                ),
+            )
+        previous_field = destination_fields.get(result_header)
+        if previous_field and previous_field != canonical_field:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Kolom hasil '{result_header}' digunakan oleh lebih dari "
+                    "satu field mapping."
+                ),
+            )
+        destination_fields[result_header] = canonical_field
+        resolved[field_name] = result_header
+
+    return resolved
 
 
 def _has_unique_upload_row(db: Session, table_name: str) -> bool:
@@ -205,28 +313,32 @@ def ensure_result_table(
     for raw_field, header in mapping.items():
         if not header or raw_field == "class_code":
             continue
-        field_name = {"doc_no": "loss_ref"}.get(raw_field, raw_field)
+        field_name = {
+            "doc_no": "loss_ref",
+            "title": "insured",
+        }.get(raw_field, raw_field)
+        result_header = result_column_name(field_name, header)
         field = fields.get(field_name)
         if not field:
             raise HTTPException(
                 status_code=422,
                 detail=f"Field mapping '{raw_field}' tidak memiliki definisi kolom di master_field.",
             )
-        if len(header) > 63 or header.casefold() in {
+        if len(result_header) > 63 or result_header.casefold() in {
             name.casefold() for name in RESULT_METADATA_COLUMNS
         }:
             raise HTTPException(
                 status_code=422,
-                detail=f"Header sumber '{header}' tidak dapat dipakai sebagai kolom hasil.",
+                detail=f"Header sumber '{result_header}' tidak dapat dipakai sebagai kolom hasil.",
             )
         sql_type, compatible_types = sql_type_for_field(field["data_type"])
-        existing = source_columns.get(header)
+        existing = source_columns.get(result_header)
         if existing and existing["sql_type"] != sql_type:
             raise HTTPException(
                 status_code=422,
-                detail=f"Header '{header}' dipetakan ke tipe data yang berbeda.",
+                detail=f"Kolom hasil '{result_header}' dipetakan ke tipe data yang berbeda.",
             )
-        source_columns[header] = {
+        source_columns[result_header] = {
             "sql_type": sql_type,
             "compatible_types": compatible_types,
         }

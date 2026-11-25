@@ -38,15 +38,17 @@ def _sql_type(data_type: str) -> tuple[str, set[str]]:
 def _result_plans(conn) -> dict[str, dict]:
     rows = conn.execute(
         text(
-            "SELECT c.cedant_code, c.cedant_short_name, f.field_name, "
+            "SELECT DISTINCT ON (m.cedant_code, f.field_id) "
+            "c.cedant_code, c.cedant_short_name, f.field_name, "
             "f.data_type, m.header_name "
             "FROM rekonsiliasi.master_mapping_column m "
             "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
             "JOIN rekonsiliasi.master_oscedant_code c ON c.cedant_code = m.cedant_code "
             "WHERE UPPER(BTRIM(f.dataset_type)) = 'OS CEDANT' "
-            "AND f.default_source = 'column' AND m.is_active = TRUE "
+            "AND f.default_source = 'column' "
             "AND m.header_name IS NOT NULL "
-            "ORDER BY c.cedant_short_name, m.mapping_version, m.column_index"
+            "ORDER BY m.cedant_code, f.field_id, m.mapping_version ASC, "
+            "m.column_index ASC NULLS LAST, m.mapping_id ASC"
         )
     ).mappings()
     plans: dict[str, dict] = {}

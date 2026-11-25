@@ -15,6 +15,9 @@ class UploadBatchLinkTests(unittest.TestCase):
         def filter(self, *_args, **_kwargs):
             return self
 
+        def order_by(self, *_args, **_kwargs):
+            return self
+
         def all(self):
             return []
 

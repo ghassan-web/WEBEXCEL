@@ -142,6 +142,12 @@ function ReviewUploadModal({
               <div className="space-y-3">
                 {fields.map((field) => {
                   const candidates = field.candidate_headers || [];
+                  const usedHeaders = new Set(
+                    Object.entries(mapping || {})
+                      .filter(([fieldName]) => fieldName !== field.field_name)
+                      .map(([, header]) => String(header).trim().toLowerCase())
+                      .filter(Boolean)
+                  );
                   const selected = candidates.find(
                     (candidate) => candidate.header === mapping?.[field.field_name]
                   );
@@ -161,11 +167,19 @@ function ReviewUploadModal({
                         className="w-full h-9 px-3 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] bg-[var(--color-surface)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20"
                       >
                         <option value="">-- Pilih header sumber --</option>
-                        {candidates.map((candidate) => (
-                          <option key={candidate.header} value={candidate.header}>
-                            {candidate.header}
-                          </option>
-                        ))}
+                        {candidates.map((candidate) => {
+                          const unavailable =
+                            usedHeaders.has(String(candidate.header).trim().toLowerCase());
+                          return (
+                            <option
+                              key={candidate.header}
+                              value={candidate.header}
+                              disabled={unavailable}
+                            >
+                              {candidate.header}{unavailable ? " (Sudah dipakai)" : ""}
+                            </option>
+                          );
+                        })}
                       </select>
                       {selected?.sample_values?.length > 0 && (
                         <span className="block mt-1 text-[10px] text-[var(--color-ink-muted)] truncate">

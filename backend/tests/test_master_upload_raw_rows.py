@@ -19,6 +19,7 @@ from app.routers.master import (
     _master_raw_row_lookup_key,
     _build_mapping_version_profiles,
     _normalize_manual_mapping,
+    _normalize_requested_mapping,
     _master_raw_row_lookup_key,
     _library_pending_sheets,
     _parse_dol,
@@ -105,6 +106,43 @@ class AutoConfirmMappedSheetsTests(unittest.TestCase):
         self.assertEqual(sheets[2]["status"], "skipped")
         self.assertEqual(sheets[3]["status"], "needs_review")
         self.assertEqual(sheets[3]["error_message"], "Invalid row")
+
+
+class DuplicateRequestedMappingTests(unittest.TestCase):
+    def test_os_cedant_rejects_the_same_source_header_for_two_fields(self):
+        catalog = [
+            {"field_name": "loss_ref", "default_source": "column"},
+            {"field_name": "outstanding", "default_source": "column"},
+        ]
+
+        with self.assertRaises(HTTPException) as raised:
+            _normalize_requested_mapping(
+                {"loss_ref": "IDR", "outstanding": "IDR"},
+                ["IDR"],
+                catalog,
+                "OS CEDANT",
+            )
+
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIn("dipetakan ke lebih dari satu field", raised.exception.detail)
+        self.assertIn("loss_ref", raised.exception.detail)
+        self.assertIn("outstanding", raised.exception.detail)
+
+    def test_os_cedant_allows_different_source_headers(self):
+        catalog = [
+            {"field_name": "loss_ref", "default_source": "column"},
+            {"field_name": "outstanding", "default_source": "column"},
+        ]
+
+        result = _normalize_requested_mapping(
+            {"loss_ref": "Claim Code", "outstanding": "Outstanding"},
+            ["Claim Code", "Outstanding"],
+            catalog,
+            "OS CEDANT",
+        )
+
+        self.assertEqual(result["loss_ref"], "Claim Code")
+        self.assertEqual(result["outstanding"], "Outstanding")
 
 
 class MappingRulePrecedenceTests(unittest.TestCase):

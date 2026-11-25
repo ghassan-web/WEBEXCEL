@@ -55,6 +55,17 @@ def result_table_name(short_name: str) -> str:
     return name
 
 
+def infopack_result_table_name(short_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", (short_name or "").lower()).strip("_")
+    name = f"os_infopack_{slug}"
+    if not slug or len(name) > 63:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Nama cedant '{short_name}' tidak dapat digunakan untuk nama tabel hasil Infopack.",
+        )
+    return name
+
+
 def result_column_name(
     field_name: str,
     source_header: str,
@@ -62,7 +73,6 @@ def result_column_name(
 ) -> str:
     canonical_field = {
         "doc_no": "loss_ref",
-        "title": "insured",
     }.get(field_name, field_name)
     return (first_mapping_headers or {}).get(canonical_field) or source_header
 
@@ -101,7 +111,30 @@ def resolve_result_columns(
     cedant_code: str,
     mapping: dict[str, str],
     catalog: list[dict],
+    dataset_type: str = "OS CEDANT",
 ) -> dict[str, str]:
+    source_fields: dict[str, list[str]] = {}
+    for field_name, source_header in mapping.items():
+        if not source_header or field_name == "class_code":
+            continue
+        source_key = str(source_header).strip().casefold()
+        source_fields.setdefault(source_key, []).append(field_name)
+    for source_key, field_names in source_fields.items():
+        if len(set(field_names)) > 1:
+            labels = ", ".join(sorted(set(field_names)))
+            source_label = next(
+                str(source_header).strip()
+                for field_name, source_header in mapping.items()
+                if str(source_header).strip().casefold() == source_key
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Header sumber '{source_label}' dipetakan ke lebih dari satu field: "
+                    f"{labels}. Setiap field harus menggunakan header Excel yang berbeda."
+                ),
+            )
+
     table_exists = db.execute(
         text(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
@@ -111,26 +144,33 @@ def resolve_result_columns(
     ).scalar_one()
     existing_columns = _table_columns(db, table_name) if table_exists else {}
 
+    normalized_dataset = str(dataset_type).strip().upper()
+    if normalized_dataset == "INFOPACK":
+        history_table = "rekonsiliasi.master_mapping_column_infopack"
+    else:
+        history_table = "rekonsiliasi.master_mapping_column"
     history = db.execute(
         text(
             "SELECT f.field_name, m.header_name "
-            "FROM rekonsiliasi.master_mapping_column m "
+            f"FROM {history_table} m "
             "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
             "WHERE m.cedant_code = :cedant_code "
-            "AND UPPER(BTRIM(f.dataset_type)) = 'OS CEDANT' "
+            "AND UPPER(BTRIM(f.dataset_type)) = :dataset_type "
             "AND f.default_source = 'column' "
             "AND m.header_name IS NOT NULL "
             "ORDER BY m.mapping_version ASC, m.column_index ASC NULLS LAST, "
             "m.mapping_id ASC"
         ),
-        {"cedant_code": cedant_code},
+        {"cedant_code": cedant_code, "dataset_type": normalized_dataset},
     ).mappings()
     first_mapping_headers: dict[str, str] = {}
     for row in history:
-        canonical_field = {
-            "doc_no": "loss_ref",
-            "title": "insured",
-        }.get(row["field_name"], row["field_name"])
+        canonical_field = row["field_name"]
+        if normalized_dataset != "INFOPACK":
+            canonical_field = {
+                "doc_no": "loss_ref",
+                "title": "insured",
+            }.get(canonical_field, canonical_field)
         first_mapping_headers.setdefault(canonical_field, row["header_name"])
 
     fields = {
@@ -143,10 +183,12 @@ def resolve_result_columns(
     for field_name, source_header in mapping.items():
         if not source_header or field_name == "class_code":
             continue
-        canonical_field = {
-            "doc_no": "loss_ref",
-            "title": "insured",
-        }.get(field_name, field_name)
+        canonical_field = field_name
+        if normalized_dataset != "INFOPACK":
+            canonical_field = {
+                "doc_no": "loss_ref",
+                "title": "insured",
+            }.get(canonical_field, canonical_field)
         field = fields.get(canonical_field)
         if not field:
             raise HTTPException(
@@ -313,10 +355,12 @@ def ensure_result_table(
     for raw_field, header in mapping.items():
         if not header or raw_field == "class_code":
             continue
-        field_name = {
-            "doc_no": "loss_ref",
-            "title": "insured",
-        }.get(raw_field, raw_field)
+        field_name = raw_field
+        if table_name.startswith("os_claim_cedant_"):
+            field_name = {
+                "doc_no": "loss_ref",
+                "title": "insured",
+            }.get(field_name, field_name)
         result_header = result_column_name(field_name, header)
         field = fields.get(field_name)
         if not field:

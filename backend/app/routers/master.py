@@ -34,7 +34,9 @@ from ..services.excel_service import (
     get_sheet_names, read_excel_with_password, KBINS_TIPE_DATA,
 )
 from ..services.cedant_result_schema import (
+    RESULT_METADATA_COLUMNS,
     ensure_result_table,
+    infopack_result_table_name,
     resolve_result_columns,
     result_table_name,
 )
@@ -1983,6 +1985,31 @@ def _normalize_requested_mapping(
             normalized["cob"] = normalized["class_code"]
         if "class_code" not in normalized and normalized.get("cob"):
             normalized["class_code"] = normalized["cob"]
+    elif dataset_type == "OS CEDANT":
+        source_fields: dict[str, list[str]] = {}
+        for field_name, header in normalized.items():
+            if field_name == "class_code":
+                continue
+            source_fields.setdefault(header.casefold(), []).append(field_name)
+        duplicate_sources = {
+            header: field_names
+            for header, field_names in source_fields.items()
+            if len(field_names) > 1
+        }
+        if duplicate_sources:
+            header_key, field_names = next(iter(duplicate_sources.items()))
+            source_header = next(
+                header for header in normalized.values()
+                if header.casefold() == header_key
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Header sumber '{source_header}' dipetakan ke lebih dari satu field: "
+                    f"{', '.join(sorted(field_names))}. "
+                    "Setiap field harus menggunakan header Excel yang berbeda."
+                ),
+            )
     return normalized
 
 
@@ -2860,6 +2887,184 @@ def _write_cedant_result_rows(
             month=month,
             year=year,
         )
+    if not parameters:
+        return table_name, 0, replaced
+
+    result = db.execute(insert_sql, parameters)
+    return table_name, max(result.rowcount or 0, 0), replaced
+
+
+def _write_infopack_result_rows(
+    db: Session,
+    *,
+    cedant_code: str,
+    batch_id: int,
+    table_id: int,
+    month: int,
+    year: int,
+    file_name: str,
+    sheet_name: str,
+    mapping: dict[str, str],
+    catalog: list[dict],
+    rows: list[tuple[dict, dict, int]],
+) -> tuple[str, int, int]:
+    short_name = db.execute(
+        text(
+            "SELECT cedant_short_name FROM rekonsiliasi.master_oscedant_code "
+            "WHERE cedant_code = :cedant_code"
+        ),
+        {"cedant_code": cedant_code},
+    ).scalar()
+    if not short_name:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Short name cedant '{cedant_code}' belum tersedia di master cedant.",
+        )
+
+    table_name = infopack_result_table_name(str(short_name))
+    result_mapping = resolve_result_columns(
+        db,
+        table_name=table_name,
+        cedant_code=cedant_code,
+        mapping=mapping,
+        catalog=catalog,
+        dataset_type="INFOPACK",
+    )
+    ensure_result_table(
+        db,
+        table_name=table_name,
+        mapping=result_mapping,
+        catalog=catalog,
+    )
+
+    table_columns = {
+        row[0]
+        for row in db.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'hasil_rekonsiliasi' AND table_name = :table_name"
+            ),
+            {"table_name": table_name},
+        ).all()
+    }
+    mapped_columns: dict[str, tuple[str, str]] = {}
+    for field_name, header in mapping.items():
+        if not header or field_name == "class_code":
+            continue
+        result_column = result_mapping.get(field_name)
+        if not result_column:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Kolom tujuan hasil untuk field '{field_name}' tidak ditemukan.",
+            )
+        if result_column in RESULT_METADATA_COLUMNS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Kolom hasil '{result_column}' bentrok dengan metadata tabel hasil.",
+            )
+        if result_column in mapped_columns:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Lebih dari satu mapping menggunakan kolom hasil '{result_column}'.",
+            )
+        mapped_columns[result_column] = (field_name, header)
+
+    if not mapped_columns:
+        return table_name, 0, 0
+
+    missing_mapped_columns = set(mapped_columns) - table_columns
+    if missing_mapped_columns:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Kolom mapping {', '.join(sorted(missing_mapped_columns))} belum tersedia "
+                f"di hasil_rekonsiliasi.{table_name}."
+            ),
+        )
+
+    already_replaced = db.execute(
+        text(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM rekonsiliasi.upload_table "
+            "WHERE batch_id = :batch_id AND confirmed_at IS NOT NULL"
+            ")"
+        ),
+        {"batch_id": batch_id},
+    ).scalar_one()
+    replaced = 0
+    if not already_replaced:
+        replaced = _delete_cedant_result_period(
+            db,
+            table_name=table_name,
+            cedant_code=cedant_code,
+            month=month,
+            year=year,
+        )
+
+    metadata_values = {
+        "cedant_code": cedant_code,
+        "class_code": None,
+        "upload_table_id": table_id,
+        "excel_row_number": None,
+        "reporting_month": month,
+        "reporting_year": year,
+        "file_name": file_name,
+        "sheet_name": sheet_name,
+    }
+    missing_metadata = set(metadata_values) - table_columns
+    if missing_metadata:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Kolom metadata {', '.join(sorted(missing_metadata))} belum tersedia "
+                f"di hasil_rekonsiliasi.{table_name}."
+            ),
+        )
+
+    insert_columns = [
+        "cedant_code",
+        "class_code",
+        "upload_table_id",
+        "excel_row_number",
+        *mapped_columns,
+        "reporting_month",
+        "reporting_year",
+        "file_name",
+        "sheet_name",
+    ]
+    preparer = db.get_bind().dialect.identifier_preparer
+    quoted_table = preparer.quote(table_name)
+    quoted_columns = ", ".join(preparer.quote(column) for column in insert_columns)
+    value_names = [f"value_{index}" for index in range(len(insert_columns))]
+    insert_sql = text(
+        f"INSERT INTO hasil_rekonsiliasi.{quoted_table} ({quoted_columns}) "
+        f"VALUES ({', '.join(':' + name for name in value_names)}) "
+        "ON CONFLICT (upload_table_id, excel_row_number) DO NOTHING"
+    )
+
+    parameters = []
+    for source_data, normalized, excel_row in rows:
+        if not excel_row:
+            raise HTTPException(
+                status_code=422,
+                detail="Nomor baris Excel tidak tersedia untuk penyimpanan hasil Infopack.",
+            )
+        values = {
+            **metadata_values,
+            "excel_row_number": int(excel_row),
+        }
+        class_code_header = mapping.get("class_code") or mapping.get("cob")
+        if class_code_header:
+            values["class_code"] = normalized.get("class_code")
+        for result_column, (field_name, source_header) in mapped_columns.items():
+            if field_name in {"dol", "gross", "tsi", "cob", "title", "value"}:
+                values[result_column] = normalized.get(field_name)
+            else:
+                values[result_column] = source_data.get(source_header)
+        parameters.append(
+            {name: values.get(column) for name, column in zip(value_names, insert_columns)}
+        )
+
     if not parameters:
         return table_name, 0, replaced
 
@@ -3909,6 +4114,41 @@ def confirm_upload_table_mapping(
                 list(rows_by_index.values()),
                 upload_batch_id=int(context["batch_id"]),
             )
+            infopack_result_rows = []
+            for raw, normalized in normalized_rows:
+                try:
+                    source_data = json.loads(raw.full_row_data)
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Arsip raw row {raw.id} tidak berisi JSON valid.",
+                    ) from exc
+                metadata = source_data.pop(WORKFLOW_RAW_META_KEY, {})
+                excel_row = metadata.get("excel_row")
+                if excel_row is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Nomor baris Excel tidak tersedia pada raw row {raw.id}.",
+                    )
+                infopack_result_rows.append((source_data, normalized, int(excel_row)))
+            infopack_result_table, infopack_rows_appended, infopack_rows_replaced = (
+                _write_infopack_result_rows(
+                    db,
+                    cedant_code=context["cedant_code"],
+                    batch_id=int(context["batch_id"]),
+                    table_id=table_id,
+                    month=int(context["reporting_month"]),
+                    year=int(context["reporting_year"]),
+                    file_name=context["file_name"],
+                    sheet_name=context["sheet_name"],
+                    mapping=mapping,
+                    catalog=catalog,
+                    rows=infopack_result_rows,
+                )
+            )
+            stats["infopack_result_table"] = infopack_result_table
+            stats["infopack_rows_appended"] = infopack_rows_appended
+            stats["infopack_rows_replaced"] = infopack_rows_replaced
         else:
             period_rows_replaced, replace_period = _replace_cedant_master_period(
                 db,

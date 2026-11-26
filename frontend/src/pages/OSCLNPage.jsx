@@ -1,878 +1,1190 @@
-// OSCLN Reconciliation Page — layout sesuai desain asli + handler aktif
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
-  listJobs, getResults, downloadReport,
-  listOsclnSnapshots, uploadOsclnCsv, runReconciliation,
+  getOsclnSources,
+  previewCustomMatching,
+  saveCustomMatching,
+  listCustomMatchingHistory,
+  getResults,
+  downloadReport,
 } from "../services/api";
-import { PageHeader, MetricTile, Card, Button } from "../components/ui";
+import { PageHeader, MetricTile, Card, Button, Badge } from "../components/ui";
 import {
   ArrowsRightLeftIcon,
   MagnifyingGlassIcon,
   ArrowPathIcon,
-  CloudArrowUpIcon,
-  ArrowTopRightOnSquareIcon,
-  InformationCircleIcon,
+  PlusIcon,
+  TrashIcon,
   CheckCircleIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
-  DocumentTextIcon,
+  TableCellsIcon,
+  ArrowDownTrayIcon,
+  ChevronDownIcon,
+  CircleStackIcon,
+  FunnelIcon,
 } from "@heroicons/react/24/outline";
 
 const PAGE_SIZE = 50;
 
-/* ── Tab config ── */
-const TAB_KEYS   = ["", "matched", "changed", "only_in_a", "only_in_b"];
-const TAB_LABELS = {
-  "":        "Semua",
-  matched:   "MATCHED_1_TO_1",
-  changed:   "MATCHED_MULTIPLE",
-  only_in_a: "NOT_FOUND",
-  only_in_b: "INVALID_KEY",
-};
-const TAB_STYLE = {
-  "":        { active: "bg-[var(--color-ink-solid)] text-white", idle: "bg-[var(--color-surface-sunken)] text-[var(--color-ink-body)] hover:bg-[var(--color-line)]/60" },
-  matched:   { active: "bg-[var(--color-brand)] text-white",     idle: "bg-[var(--color-brand-soft)] text-[var(--color-brand)] hover:opacity-90" },
-  changed:   { active: "bg-[var(--color-warning)] text-white",   idle: "bg-[var(--color-warning-soft)] text-[var(--color-warning)] hover:opacity-90" },
-  only_in_a: { active: "bg-[var(--color-danger)] text-white",    idle: "bg-[var(--color-danger-soft)] text-[var(--color-danger)] hover:opacity-90" },
-  only_in_b: { active: "bg-orange-600 text-white",               idle: "bg-orange-50 text-orange-700 hover:bg-orange-100" },
-};
+const WORKSPACE_TABS = [
+  { id: "customize", label: "Customize Matching", short: "Validasi OS Claim" },
+  { id: "summary", label: "1. Summary OS Internal", short: "Summary" },
+  { id: "internal_vs_cedant", label: "2. OS Claim Indore - Cedant", short: "Indore → Cedant" },
+  { id: "cedant_vs_internal", label: "3. OS Claim Cedant - Indore", short: "Cedant → Indore" },
+  { id: "internal_vs_infopack", label: "4. OS Claim Indore - Infopack", short: "Indore → Infopack" },
+  { id: "infopack_vs_internal", label: "5. OS Claim Infopack - Indore", short: "Infopack → Indore" },
+];
 
-/* ── match status badge styles ── */
-const MATCH_BADGE = {
-  matched:   "bg-[var(--color-valid-soft)] text-[var(--color-valid)] border border-[var(--color-valid)]/25",
-  changed:   "bg-[var(--color-warning-soft)] text-[var(--color-warning)] border border-[var(--color-warning)]/25",
-  only_in_a: "bg-[var(--color-danger-soft)] text-[var(--color-danger)] border border-[var(--color-danger)]/25",
-  only_in_b: "bg-orange-100 text-orange-700 border border-orange-200",
-};
+const POV_LIST = [
+  { value: "internal_vs_cedant", label: "POV Internal → OS Cedant", datasetType: "OS Cedant" },
+  { value: "cedant_vs_internal", label: "POV OS Cedant → Internal", datasetType: "OS Cedant" },
+  { value: "internal_vs_infopack", label: "POV Internal → Infopack", datasetType: "Infopack" },
+  { value: "infopack_vs_internal", label: "POV Infopack → Internal", datasetType: "Infopack" },
+];
 
-/* ══════════════════════════════════════════════
-   MAIN PAGE
-══════════════════════════════════════════════ */
+function fmtCurrency(val) {
+  if (val === null || val === undefined || Number.isNaN(Number(val))) return "—";
+  const num = Number(val);
+  const abs = Math.abs(num).toLocaleString("id-ID", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return num < 0 ? `(${abs})` : abs;
+}
+
+function guessDefaultCol(columns, patterns) {
+  for (const pat of patterns) {
+    const found = columns.find((c) => pat.test(c.name));
+    if (found) return found.name;
+  }
+  return "";
+}
+
 export default function OSCLNPage() {
+  const [activeTab, setActiveTab] = useState("customize");
 
-  /* ── past reconciliation jobs ── */
-  const [jobs,        setJobs]        = useState([]);
-  const [selected,    setSelected]    = useState(null);
-  const [results,     setResults]     = useState(null);
-  const [tab,         setTab]         = useState("");
-  const [search,      setSearch]      = useState("");
-  const [statusFilter,setStatusFilter]= useState("All statuses");
-  const [direction,   setDirection]   = useState("master");
-  const [page,        setPage]        = useState(0);
-  const [loading,     setLoading]     = useState(false);
-  const [loadingData, setLoadingData] = useState(false);
-  const [error,       setError]       = useState(null);
+  /* ── Introspected DB Sources ── */
+  const [sources, setSources] = useState(null);
+  const [loadingSources, setLoadingSources] = useState(true);
+  const [sourcesError, setSourcesError] = useState("");
 
-  /* ── upload OSCLN CSV ── */
-  const [osclnFile,    setOsclnFile]    = useState(null);
-  const [uploading,    setUploading]    = useState(false);
-  const [uploadPct,    setUploadPct]    = useState(0);
-  const [uploadError,  setUploadError]  = useState(null);
-  const [uploadOk,     setUploadOk]     = useState(null);   // { snapshot_id, file_name, total_rows }
+  /* ── Customize Matching Config ── */
+  const [pov, setPov] = useState("internal_vs_cedant");
+  const [selectedTable, setSelectedTable] = useState("");
+  const [tableSearch, setTableSearch] = useState("");
+  const [tableDropdownOpen, setTableDropdownOpen] = useState(false);
+  const tableDropdownRef = useRef(null);
 
-  /* ── snapshots (for Reconciliation Setup) ── */
-  const [snapshots,   setSnapshots]   = useState([]);
-  const [activeSnap,  setActiveSnap]  = useState(null);
+  const [reportingMonth, setReportingMonth] = useState("");
+  const [reportingYear, setReportingYear] = useState("");
+  const [cedantFilter, setCedantFilter] = useState("");
+  const [aggregateInternal, setAggregateInternal] = useState(true);
 
-  /* ── reconcile ── */
-  const [recTipeData, setRecTipeData] = useState("OS Cedant");
-  const [recPk,       setRecPk]       = useState("primary_key_value");
-  const [reconciling, setReconciling] = useState(false);
-  const [recError,    setRecError]    = useState(null);
+  const [matchPairs, setMatchPairs] = useState([{ master_col: "", cedant_col: "" }]);
+  const [masterOutstandingCol, setMasterOutstandingCol] = useState("");
+  const [cedantOutstandingCol, setCedantOutstandingCol] = useState("");
 
-  const fileInputRef = useRef(null);
+  /* ── Preview & Save State ── */
+  const [comparing, setComparing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [saveSuccess, setSaveSuccess] = useState(null); // { job_id, message }
+  const [previewData, setPreviewData] = useState(null); // { summary, base_columns, total_rows, rows }
+  const [statusFilter, setStatusFilter] = useState("ALL"); // 'ALL' | 'matched_exact' | 'matched_diff' | 'not_matched'
+  const [rowSearch, setRowSearch] = useState("");
+  const [page, setPage] = useState(0);
 
-  /* ─── loaders ─────────────────────────────── */
-  const loadJobs = useCallback(async () => {
-    setLoading(true);
+  /* ── Saved History (for Summary & 4 POV tabs) ── */
+  const [historyItems, setHistoryItems] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [selectedHistoryJob, setSelectedHistoryJob] = useState(null);
+  const [historyJobRows, setHistoryJobRows] = useState(null);
+  const [loadingJobRows, setLoadingJobRows] = useState(false);
+
+  /* ── Load DB Sources ── */
+  const loadSources = useCallback(async () => {
+    setLoadingSources(true);
+    setSourcesError("");
     try {
-      const res  = await listJobs(0, 100);
-      const done = (res.jobs || []).filter(j => j.status === "done");
-      setJobs(done);
-      if (done.length > 0) setSelected(prev => prev ?? done[0]);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
+      const res = await getOsclnSources();
+      setSources(res);
+    } catch (err) {
+      setSourcesError(err.message || "Gagal memuat daftar tabel database.");
+    } finally {
+      setLoadingSources(false);
+    }
   }, []);
 
-  const loadSnapshots = useCallback(async () => {
+  const loadHistory = useCallback(async () => {
+    setLoadingHistory(true);
     try {
-      const res   = await listOsclnSnapshots(0, 50);
-      const snaps = res.snapshots || [];
-      setSnapshots(snaps);
-      if (snaps.length > 0) setActiveSnap(prev => prev ?? snaps[0]);
-    } catch (_) {}
+      const res = await listCustomMatchingHistory("", 100);
+      setHistoryItems(res.items || []);
+    } catch (_) {
+      setHistoryItems([]);
+    } finally {
+      setLoadingHistory(false);
+    }
   }, []);
 
-  const loadResults = useCallback(async (jobId, diffType, pageNum) => {
-    if (!jobId) return;
-    setLoadingData(true);
-    setError(null);
-    try {
-      const res = await getResults(jobId, {
-        diffType: diffType || undefined,
-        skip:     pageNum * PAGE_SIZE,
-        limit:    PAGE_SIZE,
-      });
-      setResults(res);
-    } catch (e) { setError(e.message); }
-    finally { setLoadingData(false); }
-  }, []);
-
-  useEffect(() => { loadJobs(); loadSnapshots(); }, [loadJobs, loadSnapshots]);
   useEffect(() => {
-    if (selected?.id) loadResults(selected.id, tab, page);
-  }, [selected?.id, tab, page, loadResults]);
-  useEffect(() => { setPage(0); }, [tab, selected?.id]);
+    loadSources();
+    loadHistory();
+  }, [loadSources, loadHistory]);
 
-  /* ── sync recPk when snapshot changes ── */
   useEffect(() => {
-    if (activeSnap?.primary_key_col) setRecPk(activeSnap.primary_key_col);
-  }, [activeSnap]);
-
-  /* ─── handlers ────────────────────────────── */
-  const handleUpload = async () => {
-    if (!osclnFile) return setUploadError("Pilih file CSV terlebih dahulu.");
-    setUploading(true);
-    setUploadError(null);
-    setUploadOk(null);
-    setUploadPct(0);
-    try {
-      const now = new Date();
-      const fd  = new FormData();
-      fd.append("file",            osclnFile);
-      fd.append("bulan",           String(now.getMonth() + 1).padStart(2, "0"));
-      fd.append("tahun",           String(now.getFullYear()));
-      fd.append("primary_key_col", recPk.trim() || "primary_key_value");
-      const res = await uploadOsclnCsv(fd, setUploadPct);
-      setUploadOk(res);
-      setOsclnFile(null);
-      // refresh snapshots and auto-select new one
-      const snaps = await listOsclnSnapshots(0, 50);
-      const list  = snaps.snapshots || [];
-      setSnapshots(list);
-      const fresh = list.find(s => s.id === res.snapshot_id) || list[0] || null;
-      setActiveSnap(fresh);
-      if (fresh?.primary_key_col) setRecPk(fresh.primary_key_col);
-    } catch (e) { setUploadError(e.message); }
-    finally { setUploading(false); }
-  };
-
-  const handleReconcile = async () => {
-    if (!activeSnap)   return setRecError("Pilih snapshot OSCLN terlebih dahulu.");
-    if (!recPk.trim()) return setRecError("Kolom Primary Key wajib diisi.");
-    setReconciling(true);
-    setRecError(null);
-    setResults(null);
-    setPage(0);
-    setTab("");
-    try {
-      const res = await runReconciliation({
-        snapshotId:    activeSnap.id,
-        tipeData:      recTipeData,
-        primaryKeyCol: recPk.trim(),
-      });
-      // Muat ulang job list dan langsung select job baru berdasarkan job_id
-      const jobRes = await listJobs(0, 100);
-      const done   = (jobRes.jobs || []).filter(j => j.status === "done");
-      setJobs(done);
-      const newJob = done.find(j => j.id === res.job_id);
-      if (newJob) {
-        setSelected({ ...newJob }); // spread agar React deteksi perubahan referensi
-      } else {
-        // fallback: buat object dari response reconcile langsung
-        setSelected({
-          id:             res.job_id,
-          total_rows_a:   res.total_rows_a,
-          total_rows_b:   res.total_rows_b,
-          total_matched:  res.summary?.matched   ?? 0,
-          total_changed:  res.summary?.changed   ?? 0,
-          total_only_in_a:res.summary?.only_in_a ?? 0,
-          total_only_in_b:res.summary?.only_in_b ?? 0,
-          bulan:          activeSnap.bulan,
-          tahun:          activeSnap.tahun,
-          file_b_name:    activeSnap.file_name,
-          sheet_a:        "Master",
-          sheet_b:        `OSCLN-${activeSnap.file_name}`,
-          status:         "done",
-        });
+    const handleOutside = (e) => {
+      if (tableDropdownRef.current && !tableDropdownRef.current.contains(e.target)) {
+        setTableDropdownOpen(false);
       }
-    } catch (e) { setRecError(e.message); }
-    finally { setReconciling(false); }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, []);
+
+  /* ── Derived Columns & Filtered Result Tables ── */
+  const fsiColumns = sources?.fsi_columns || [];
+  const allResultTables = sources?.result_tables || [];
+  const activePovMeta = POV_LIST.find((p) => p.value === pov) || POV_LIST[0];
+
+  const tablesForPov = useMemo(() => {
+    const matchingType = allResultTables.filter(
+      (t) => t.dataset_type === activePovMeta.datasetType
+    );
+    return matchingType.length > 0 ? matchingType : allResultTables;
+  }, [allResultTables, activePovMeta.datasetType]);
+
+  const filteredTables = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    if (!q) return tablesForPov;
+    return tablesForPov.filter(
+      (t) =>
+        t.table_name.toLowerCase().includes(q) ||
+        t.cedant_label.toLowerCase().includes(q)
+    );
+  }, [tablesForPov, tableSearch]);
+
+  const activeTableMeta = useMemo(
+    () => allResultTables.find((t) => t.table_name === selectedTable) || null,
+    [allResultTables, selectedTable]
+  );
+
+  const cedantColumns = activeTableMeta?.columns || [];
+
+  /* Auto-select first table & smart default columns when sources load or table changes */
+  useEffect(() => {
+    if (!selectedTable && tablesForPov.length > 0) {
+      setSelectedTable(tablesForPov[0].table_name);
+    }
+  }, [tablesForPov, selectedTable]);
+
+  useEffect(() => {
+    if (fsiColumns.length === 0 || cedantColumns.length === 0) return;
+
+    const defaultMasterKey = guessDefaultCol(fsiColumns, [
+      /^loss_?ref$/i,
+      /^doc_?no$/i,
+      /loss.*ref/i,
+      /claim.*no/i,
+    ]);
+    const defaultCedantKey = guessDefaultCol(cedantColumns, [
+      /^doc_?no$/i,
+      /loss.*ref/i,
+      /claim.*no/i,
+      /^no$/i,
+    ]);
+    const defaultMasterOut = guessDefaultCol(fsiColumns, [
+      /^outstanding_?idr$/i,
+      /^net_?idr$/i,
+      /^our_?share$/i,
+      /outstanding/i,
+      /net/i,
+    ]);
+    const defaultCedantOut = guessDefaultCol(cedantColumns, [
+      /outstanding/i,
+      /net.*os/i,
+      /amount/i,
+      /gross/i,
+      /balance/i,
+    ]);
+
+    setMatchPairs((prev) => {
+      if (prev.length === 1 && !prev[0].master_col && !prev[0].cedant_col) {
+        return [{ master_col: defaultMasterKey, cedant_col: defaultCedantKey }];
+      }
+      return prev.map((p) => ({
+        master_col: fsiColumns.some((c) => c.name === p.master_col)
+          ? p.master_col
+          : defaultMasterKey,
+        cedant_col: cedantColumns.some((c) => c.name === p.cedant_col)
+          ? p.cedant_col
+          : defaultCedantKey,
+      }));
+    });
+
+    setMasterOutstandingCol((prev) =>
+      fsiColumns.some((c) => c.name === prev) ? prev : defaultMasterOut
+    );
+    setCedantOutstandingCol((prev) =>
+      cedantColumns.some((c) => c.name === prev) ? prev : defaultCedantOut
+    );
+  }, [selectedTable, fsiColumns, cedantColumns]);
+
+  /* ── Pair Builder Handlers ── */
+  const handleAddPair = () => {
+    setMatchPairs((prev) => [...prev, { master_col: "", cedant_col: "" }]);
   };
 
-  /* ─── derived ─────────────────────────────── */
-  const masterTotal = selected
-    ? (selected.total_matched   ?? 0) + (selected.total_changed   ?? 0)
-    + (selected.total_only_in_a ?? 0) + (selected.total_only_in_b ?? 0)
-    : 0;
-
-  const coveragePct = masterTotal > 0 && (selected?.total_matched ?? 0) > 0
-    ? ((selected.total_matched / masterTotal) * 100).toFixed(2)
-    : "0.00";
-
-  const tabCounts = {
-    "":        masterTotal,
-    matched:   selected?.total_matched   ?? 0,
-    changed:   selected?.total_changed   ?? 0,
-    only_in_a: selected?.total_only_in_a ?? 0,
-    only_in_b: selected?.total_only_in_b ?? 0,
+  const handleRemovePair = (index) => {
+    setMatchPairs((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
   };
 
-  const totalPages = results ? Math.ceil(results.total / PAGE_SIZE) : 0;
-  const totalRows  = results?.total ?? 0;
+  const handlePairChange = (index, side, value) => {
+    setMatchPairs((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, [side]: value } : item))
+    );
+  };
 
-  const rows = (results?.results || []).filter(r => {
-    const q = search.toLowerCase();
-    return !q || r.primary_key_value?.toString().toLowerCase().includes(q);
+  const handleResetComparison = () => {
+    setMatchPairs([{ master_col: "", cedant_col: "" }]);
+    setMasterOutstandingCol("");
+    setCedantOutstandingCol("");
+    setReportingMonth("");
+    setReportingYear("");
+    setCedantFilter("");
+    setPreviewData(null);
+    setSaveSuccess(null);
+    setActionError("");
+    setStatusFilter("ALL");
+    setRowSearch("");
+    setPage(0);
+  };
+
+  const buildPayload = () => ({
+    pov,
+    result_table: selectedTable,
+    reporting_month: reportingMonth ? Number(reportingMonth) : null,
+    reporting_year: reportingYear ? Number(reportingYear) : null,
+    cedant_filter: cedantFilter.trim() || null,
+    match_pairs: matchPairs.filter((p) => p.master_col && p.cedant_col),
+    master_outstanding_col: masterOutstandingCol || null,
+    cedant_outstanding_col: cedantOutstandingCol || null,
+    aggregate_internal: aggregateInternal,
+    limit: 1000,
   });
 
-  /* ─── row mapper ───────────────────────────── */
-  function mapRow(row, i) {
-    const srcA = row.row_data_a || {};   // Master row data
-    const srcB = row.row_data_b || {};   // OSCLN row data
-    // For only_in_b rows, srcA is empty — use srcB as primary display source
-    const src  = Object.keys(srcA).length ? srcA : srcB;
-    const keysA = Object.keys(srcA);
-    const keys  = Object.keys(src);
+  const handleCompare = async () => {
+    const payload = buildPayload();
+    if (!payload.result_table) {
+      setActionError("Pilih tabel database cedant terlebih dahulu.");
+      return;
+    }
+    if (payload.match_pairs.length === 0) {
+      setActionError("Pilih minimal satu pasangan Kolom Master = Kolom Cedant.");
+      return;
+    }
+    setComparing(true);
+    setActionError("");
+    setSaveSuccess(null);
+    setPage(0);
+    try {
+      const res = await previewCustomMatching(payload);
+      setPreviewData(res);
+    } catch (err) {
+      setActionError(err.message || "Gagal membandingkan data.");
+      setPreviewData(null);
+    } finally {
+      setComparing(false);
+    }
+  };
 
-    const find = (re, pool, dataObj) => {
-      const k = pool.find(k => re.test(k));
-      if (!k) return "—";
-      const v = dataObj[k];
-      return (v !== null && v !== undefined && String(v).trim() !== "" && String(v) !== "nan") ? String(v) : "—";
-    };
+  const handleSaveMatching = async () => {
+    const payload = buildPayload();
+    if (!payload.result_table || payload.match_pairs.length === 0) {
+      setActionError("Jalankan atau lengkapi konfigurasi pencocokkan terlebih dahulu.");
+      return;
+    }
+    setSaving(true);
+    setActionError("");
+    setSaveSuccess(null);
+    try {
+      const res = await saveCustomMatching(payload);
+      setSaveSuccess({ job_id: res.job_id, message: res.message });
+      await loadHistory();
+    } catch (err) {
+      setActionError(err.message || "Gagal menyimpan data matching.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
-    const findA = (re) => find(re, keysA, srcA);
-    const findB = (re) => find(re, Object.keys(srcB), srcB);
+  const handleOpenHistoryJob = async (jobItem) => {
+    setSelectedHistoryJob(jobItem);
+    setLoadingJobRows(true);
+    try {
+      const res = await getResults(jobItem.job_id, { skip: 0, limit: 100 });
+      setHistoryJobRows(res);
+    } catch (_) {
+      setHistoryJobRows(null);
+    } finally {
+      setLoadingJobRows(false);
+    }
+  };
 
-    // ── Cedant — utamakan kolom "cedant" yang sudah diinjeksi backend ──
-    const cedant = (() => {
-      // backend sekarang inject r.cedant ke dalam data dengan key "cedant"
-      const v = findA(/^cedant$/i);
-      if (v !== "—") return v;
-      const v2 = findA(/^company$/i);
-      if (v2 !== "—") return v2;
-      // broader fallback
-      return findA(/cedant/i) !== "—"
-        ? findA(/cedant/i)
-        : "—";
-    })();
+  /* ── Filtered Preview Rows ── */
+  const filteredPreviewRows = useMemo(() => {
+    const rows = previewData?.rows || [];
+    const q = rowSearch.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (statusFilter === "matched_exact" && r.match_status !== "matched_exact") return false;
+      if (statusFilter === "matched_diff" && r.match_status !== "matched_diff") return false;
+      if (statusFilter === "not_matched" && r.ketersediaan !== "TIDAK ADA") return false;
+      if (!q) return true;
+      if (String(r.match_key || "").toLowerCase().includes(q)) return true;
+      return Object.values(r.base_row || {}).some((v) =>
+        String(v ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [previewData, statusFilter, rowSearch]);
 
-    // ── Sheet — kolom "sheet" diinjeksi backend saat ingest ──
-    const sheet = (() => {
-      const v = findA(/^sheet$/i);
-      if (v !== "—") return v;
-      // fallback ke sheet_a dari job metadata
-      return selected?.sheet_a ?? "Sheet1";
-    })();
+  const totalPreviewPages = Math.ceil(filteredPreviewRows.length / PAGE_SIZE);
+  const pagedPreviewRows = filteredPreviewRows.slice(
+    page * PAGE_SIZE,
+    (page + 1) * PAGE_SIZE
+  );
 
-    // ── Outstanding ──
-    const outstanding = (() => {
-      for (const re of [
-        /^Orig Currency Amt$/,/^Amount_Net_OS$/i,/^outstanding$/i,/^net_outstanding$/i,
-        /^OS$/,/^os_amount$/i,/^net_os$/i,/^R\/I Share Amount$/i,/^Remain OS/i,
-        /^Outstanding Claim$/i,/^Sum of Outstanding$/i,/^TOTAL AMOUNT TSAI$/i,
-        /^RENDO SHARE$/i,/^NET BALANCE$/i,/^NET_AMT$/i,/^Saldo Akhir Tagih$/i,/^AMOUNT$/i,
-      ]) { const v = findA(re); if (v !== "—") return v; }
-      return findA(/outstanding|balance/i);
-    })();
+  const visibleBaseCols = useMemo(
+    () => (previewData?.base_columns || []).slice(0, 12),
+    [previewData]
+  );
 
-    // ── Date of Loss ──
-    const dol = (() => {
-      for (const re of [
-        /^Trans Desc\/DOL$/i,/^DOL$/i,/^DOL \(Date of Loss\)$/i,/^DATE OF LOSS$/i,
-        /^Date of Loss$/i,/^date_of_loss$/i,/^loss_date$/i,/^Tgl\. DOL$/i,
-        /^DOCL$/i,/^Loss Date$/i,/^D\.O\.L$/i,/^LossClaim$/i,/^tg_kejadian$/i,
-      ]) { const v = findA(re); if (v !== "—") return v; }
-      return findA(/date.*loss|loss.*date|\bdol\b/i);
-    })();
+  /* ── Filtered History for Summary & 4 POV tabs ── */
+  const povHistoryItems = useMemo(() => {
+    if (activeTab === "summary") return historyItems;
+    return historyItems.filter((item) => item.pov === activeTab);
+  }, [historyItems, activeTab]);
 
-    // ── Keterangan Loss Ref ──
-    const ketLossRef = (() => {
-      for (const re of [
-        /^keterangan$/i,/^ket$/i,/^keterangan_loss_ref$/i,/^ket_loss_ref$/i,
-        /^description$/i,/^desc$/i,/^remark$/i,/^note$/i,/^catatan$/i,
-      ]) { const v = findA(re); if (v !== "—") return v; }
-      return findA(/keter|remark|note/i);
-    })();
-
-    // ── Same-key rows = count how many rows in results share this PK ──
-    // Untuk saat ini tampilkan "1" karena deduplikasi sudah dilakukan sebelum compare
-    const sameKeyRows = "1";
-
-    // ── OSCLN matched = "1" jika ada di OSCLN, "0" jika tidak ──
-    const osclnMatched = (row.diff_type === "matched" || row.diff_type === "changed") ? "1" : "0";
-
-    const idx = i + 1 + page * PAGE_SIZE;
-
-    return {
-      runId:        `REC-${String(selected?.id ?? 0).padStart(7,"0")}-${String(idx).padStart(5,"0")}`,
-      lossRef:      row.primary_key_value ?? "—",
-      diffType:     row.diff_type,
-      cedant,
-      sheet,
-      outstanding,
-      dol,
-      ketLossRef,
-      sameKeyRows,
-      osclnMatched,
-      // OSCLN-side columns (from srcB)
-      osclnCedant:  (() => { const v = findB(/^cedant$/i); return v !== "—" ? v : findB(/cedant|company/i); })(),
-      osclnDol:     (() => { for (const re of [/^DOL$/i,/^DATE OF LOSS$/i,/^Date of Loss$/i,/^date_of_loss$/i,/^loss_date$/i]) { const v = findB(re); if (v !== "—") return v; } return findB(/date.*loss|\bdol\b/i); })(),
-      osclnLoss:    (() => { for (const re of [/^outstanding$/i,/^Orig Currency Amt$/,/^Amount_Net_OS$/i,/^NET BALANCE$/i]) { const v = findB(re); if (v !== "—") return v; } return findB(/outstanding|balance/i); })(),
-      rowNum:       String(idx),
-    };
-  }
-
-  /* ════════════════════════════════════════════
-     RENDER
-  ════════════════════════════════════════════ */
   return (
     <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans text-[var(--color-ink)] saas-page-enter">
       <PageHeader
-        title="OSCLN Reconciliation"
-        description="Cocokkan Master OS Claim hasil append dengan snapshot CSV internal OSCLN secara dua arah tanpa mengubah data master."
+        title="OSCLN Reconciliation & Matching"
+        description="Bandingkan data OSCLN Internal (fsi_db.clickhouse.oscln) terhadap tabel hasil per-cedant (hasil_rekonsiliasi) dengan pilihan field & POV bebas."
         actions={
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={ArrowPathIcon}
-            loading={loading}
-            onClick={() => {
-              loadJobs();
-              loadSnapshots();
-            }}
-          >
-            Refresh Status
-          </Button>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <Badge
+              tone={sources?.fsi_connected ? "valid" : "warning"}
+              dot
+              icon={CircleStackIcon}
+            >
+              {sources?.fsi_connected
+                ? `fsi_db Connected (${(sources.fsi_total_rows || 0).toLocaleString("id-ID")} rows)`
+                : "fsi_db Belum Terhubung"}
+            </Badge>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ArrowPathIcon}
+              loading={loadingSources}
+              onClick={() => {
+                loadSources();
+                loadHistory();
+              }}
+            >
+              Refresh
+            </Button>
+          </div>
         }
       />
 
-      {/* ── Two-panel setup ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* ══ LEFT: Internal Data Source · OSCLN ══ */}
-        <Card
-          title="Internal Data Source · OSCLN"
-          description="Import snapshot CSV OSCLN terbaru. Import berikutnya menggantikan snapshot OSCLN, bukan menambahi/menimpa Master OS Claim."
-        >
-          <div className="flex flex-col gap-4 h-full">
-            <div>
-              <p className="text-xs font-semibold text-[var(--color-ink-body)] mb-2">
-                Upload OSCLN CSV (maks. 15 MB)
-              </p>
-              <div className="flex items-center gap-2.5">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    setOsclnFile(e.target.files[0] || null);
-                    setUploadError(null);
-                    setUploadOk(null);
-                    e.target.value = "";
-                  }}
-                  disabled={uploading}
-                />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                >
-                  Choose File
-                </Button>
-                <span className="text-xs text-[var(--color-ink-muted)] truncate max-w-[240px]">
-                  {osclnFile ? osclnFile.name : "No file chosen"}
-                </span>
-              </div>
-
-              {/* Progress */}
-              {uploading && uploadPct > 0 && uploadPct < 100 && (
-                <div className="mt-3 flex flex-col gap-1">
-                  <div className="flex justify-between text-xs text-[var(--color-ink-muted)]">
-                    <span>Mengunggah…</span>
-                    <span className="font-semibold font-mono text-[var(--color-brand)]">
-                      {uploadPct}%
-                    </span>
-                  </div>
-                  <div className="h-1.5 bg-[var(--color-surface-sunken)] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[var(--color-brand)] rounded-full transition-all duration-300"
-                      style={{ width: `${uploadPct}%` }}
-                      role="progressbar"
-                      aria-valuenow={uploadPct}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                    />
-                  </div>
-                </div>
-              )}
-              {uploading && uploadPct >= 100 && (
-                <div className="mt-3 flex items-center gap-2 text-xs text-[var(--color-brand)] animate-pulse">
-                  <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> Memproses data…
-                </div>
-              )}
-
-              {/* Error / success */}
-              {uploadError && (
-                <div
-                  role="alert"
-                  className="mt-3 flex items-start gap-2 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] px-3 py-2.5 rounded-[var(--radius-control)] text-xs"
-                >
-                  <ExclamationCircleIcon className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>{uploadError}</span>
-                </div>
-              )}
-              {uploadOk && (
-                <div className="mt-3 flex items-start gap-2 bg-[var(--color-brand-soft)] border border-[var(--color-brand-line)] text-[var(--color-brand)] px-3 py-2.5 rounded-[var(--radius-control)] text-xs">
-                  <CheckCircleIcon className="h-4 w-4 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold">Upload berhasil</p>
-                    <p className="mt-0.5 text-[var(--color-ink-body)]">
-                      <strong>{uploadOk.total_rows?.toLocaleString("id-ID")}</strong> baris &middot; Snapshot #{uploadOk.snapshot_id} &middot; {uploadOk.file_name}
-                    </p>
-                    <p className="mt-0.5 text-[var(--color-ink-muted)]">
-                      Snapshot otomatis dipilih. Klik <strong>Run Two-Way Matching</strong>.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-auto pt-2">
-              <Button
-                variant="primary"
-                size="sm"
-                icon={CloudArrowUpIcon}
-                loading={uploading}
-                disabled={!osclnFile}
-                onClick={handleUpload}
-              >
-                {uploading ? "Mengunggah…" : "Upload OSCLN CSV"}
-              </Button>
-            </div>
-          </div>
-        </Card>
-
-        {/* ══ RIGHT: Reconciliation Setup ══ */}
-        <Card
-          title="Reconciliation Setup"
-          description="Konfigurasi snapshot OSCLN aktif, tipe data Master, dan kunci pencocokan"
-        >
-          <div className="flex flex-col gap-4 h-full">
-            {/* Info box */}
-            <div className="bg-[var(--color-brand-soft)] border border-[var(--color-brand-line)] rounded-[var(--radius-control)] px-4 py-3 flex items-start gap-2 text-xs text-[var(--color-ink-body)]">
-              <InformationCircleIcon className="h-4 w-4 shrink-0 mt-0.5 text-[var(--color-brand)]" />
-              <span className="leading-relaxed">
-                <strong className="text-[var(--color-brand)]">
-                  Matching key: Master[Loss Ref] &harr; OSCLN[loss_ref].
-                </strong>{" "}
-                Perbandingan bersifat key only. Kode cedant internal berbeda dari label cedant eksternal; nominal dan tanggal ditampilkan sebagai konteks,{" "}
-                <span className="text-[var(--color-brand)] font-semibold">
-                  belum menjadi aturan validasi.
-                </span>
-              </span>
-            </div>
-
-            {/* Active snapshot badge */}
-            {activeSnap && (
-              <div className="bg-[var(--color-valid-soft)] border border-[var(--color-valid)]/25 rounded-[var(--radius-control)] px-4 py-3 flex items-start gap-2 text-xs text-[var(--color-valid)]">
-                <CheckCircleIcon className="h-4 w-4 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold text-[var(--color-ink)]">{activeSnap.file_name}</p>
-                  <p className="text-[var(--color-ink-muted)] mt-0.5">
-                    {activeSnap.total_rows?.toLocaleString("id-ID")} baris OSCLN &middot;{" "}
-                    {activeSnap.tahun}-{activeSnap.bulan}{" "}
-                    {activeSnap.created_at
-                      ? new Date(activeSnap.created_at).toLocaleTimeString("id-ID", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                        })
-                      : ""}
-                    {selected && (
-                      <span>
-                        {" "}
-                        &middot; Master OS Claim: {(selected.total_rows_a ?? 0).toLocaleString("id-ID")} baris
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Snapshot picker */}
-            {snapshots.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-[var(--color-ink-body)] mb-1.5">
-                  Snapshot aktif
-                </p>
-                <select
-                  value={activeSnap?.id ?? ""}
-                  onChange={(e) => {
-                    const s = snapshots.find((x) => x.id === Number(e.target.value));
-                    setActiveSnap(s || null);
-                    if (s?.primary_key_col) setRecPk(s.primary_key_col);
-                  }}
-                  className="w-full border border-[var(--color-line)] rounded-[var(--radius-control)] px-3 py-2 text-xs bg-[var(--color-surface)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)]"
-                >
-                  {snapshots.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      #{s.id} &middot; {s.file_name} &middot; {s.bulan}/{s.tahun} &middot; {s.total_rows?.toLocaleString("id-ID")} baris
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Tipe Data + Primary Key */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-xs font-semibold text-[var(--color-ink-body)] mb-1">
-                  Tipe Data
-                </p>
-                <select
-                  value={recTipeData}
-                  onChange={(e) => setRecTipeData(e.target.value)}
-                  className="w-full border border-[var(--color-line)] rounded-[var(--radius-control)] px-3 py-2 text-xs bg-[var(--color-surface)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)]"
-                >
-                  <option value="OS Cedant">OS Claim Cedant</option>
-                  <option value="Infopack">Infopack</option>
-                </select>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-[var(--color-ink-body)] mb-1">
-                  Kolom Primary Key
-                </p>
-                <input
-                  type="text"
-                  value={recPk}
-                  onChange={(e) => setRecPk(e.target.value)}
-                  placeholder="primary_key_value"
-                  className="w-full border border-[var(--color-line)] rounded-[var(--radius-control)] px-3 py-2 text-xs bg-[var(--color-surface)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)] font-mono"
-                />
-              </div>
-            </div>
-
-            {/* Past results picker */}
-            {jobs.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-[var(--color-ink-body)] mb-1.5">
-                  Dataset aktif (hasil sebelumnya)
-                </p>
-                <select
-                  value={selected?.id ?? ""}
-                  onChange={(e) => {
-                    const j = jobs.find((x) => x.id === Number(e.target.value));
-                    if (j) setSelected(j);
-                  }}
-                  className="w-full border border-[var(--color-line)] rounded-[var(--radius-control)] px-3 py-2 text-xs bg-[var(--color-surface)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)]"
-                >
-                  {jobs.map((j) => (
-                    <option key={j.id} value={j.id}>
-                      #{j.id} &middot; {j.file_b_name} &middot; {j.bulan}/{j.tahun}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Reconcile error */}
-            {recError && (
-              <div
-                role="alert"
-                className="flex items-start gap-2 bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] px-3 py-2 rounded-[var(--radius-control)] text-xs"
-              >
-                <ExclamationCircleIcon className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{recError}</span>
-              </div>
-            )}
-
-            {/* Action buttons */}
-            <div className="flex flex-wrap gap-2 mt-auto pt-2">
-              <Button
-                variant="primary"
-                size="sm"
-                icon={ArrowsRightLeftIcon}
-                loading={reconciling}
-                disabled={!activeSnap}
-                onClick={handleReconcile}
-              >
-                {reconciling ? "Memproses…" : "Run Two-Way Matching"}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={ArrowTopRightOnSquareIcon}
-                disabled={!selected}
-                onClick={() => selected && downloadReport(selected.id)}
-              >
-                Open Results Sheet
-              </Button>
-            </div>
-          </div>
-        </Card>
+      {/* ── Top 6-Tab Workspace Bar (mengikuti 5 POV + Customize Matching) ── */}
+      <div className="flex bg-[var(--color-surface)] p-1 rounded-[var(--radius-control)] border border-[var(--color-line)] shadow-2xs overflow-x-auto gap-1 w-full lg:w-fit">
+        {WORKSPACE_TABS.map((t) => {
+          const isActive = activeTab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setActiveTab(t.id);
+                setSelectedHistoryJob(null);
+                setHistoryJobRows(null);
+              }}
+              className={`px-3.5 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                isActive
+                  ? "bg-[var(--color-brand)] text-white shadow-2xs"
+                  : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-sunken)]/60"
+              }`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </div>
 
-      {/* ── Stat cards ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricTile
-          label="Master OS Claim Rows"
-          value={selected?.total_rows_a?.toLocaleString("id-ID") ?? "—"}
-          hint="Jumlah baris dari POV aktif"
-          icon={DocumentTextIcon}
-          accent="brand"
-        />
-        <MetricTile
-          label="Found in Other Source"
-          value={selected?.total_matched?.toLocaleString("id-ID") ?? "—"}
-          hint={`Coverage ${coveragePct}%`}
-          icon={CheckCircleIcon}
-          accent="valid"
-          type={selected ? "progress" : "none"}
-          progressValue={Number(coveragePct)}
-          progressLabel="Coverage"
-          progressColor="var(--color-valid)"
-        />
-        <MetricTile
-          label="Not Found"
-          value={selected?.total_only_in_a?.toLocaleString("id-ID") ?? "—"}
-          hint="Butuh tindak lanjut"
-          icon={ExclamationCircleIcon}
-          accent="danger"
-        />
-        <MetricTile
-          label="Multiple / Invalid"
-          value={((selected?.total_changed ?? 0) + (selected?.total_only_in_b ?? 0)).toLocaleString("id-ID")}
-          hint={`Invalid key: ${selected?.total_only_in_b ?? 0}`}
-          icon={ExclamationTriangleIcon}
-          accent="warning"
-        />
-      </div>
-
-      {error && (
-        <div className="bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/30 text-[var(--color-danger)] px-4 py-3 rounded-[var(--radius-control)] text-xs font-medium flex items-center gap-2">
-          <ExclamationTriangleIcon className="h-4 w-4 shrink-0" />
-          {error}
+      {/* ── Warning jika fsi_db belum terkonfigurasi/terhubung ── */}
+      {!loadingSources && (sourcesError || sources?.fsi_error) && (
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+          <ExclamationTriangleIcon className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-semibold">Koneksi `fsi_db` (clickhouse.oscln) belum aktif</p>
+            <p className="text-amber-800">{sourcesError || sources?.fsi_error}</p>
+          </div>
         </div>
       )}
 
-      {/* ── Two-Way Matching Results ── */}
-      <Card
-        title="Two-Way Matching Results"
-        description="Setiap baris sumber tampil satu kali. Hasil multiple match diringkas, tanpa menggandakan nilai."
-        actions={
-          <div className="flex rounded-[var(--radius-control)] border border-[var(--color-line)] overflow-hidden text-xs font-bold shrink-0">
-            <button
-              type="button"
-              onClick={() => setDirection("master")}
-              className={`px-3.5 py-1.5 transition-colors cursor-pointer ${
-                direction === "master"
-                  ? "bg-[var(--color-brand)] text-white"
-                  : "bg-[var(--color-surface)] text-[var(--color-ink-body)] hover:bg-[var(--color-surface-sunken)]"
-              }`}
-            >
-              Master &rarr; OSCLN
-            </button>
-            <button
-              type="button"
-              onClick={() => setDirection("oscln")}
-              className={`px-3.5 py-1.5 transition-colors cursor-pointer ${
-                direction === "oscln"
-                  ? "bg-[var(--color-brand)] text-white"
-                  : "bg-[var(--color-surface)] text-[var(--color-ink-body)] hover:bg-[var(--color-surface-sunken)]"
-              }`}
-            >
-              OSCLN &rarr; Master
-            </button>
-          </div>
-        }
-        padding="none"
-      >
-        {/* Filter bar */}
-        <div className="px-5 py-3 border-b border-[var(--color-line)] flex flex-wrap items-center gap-2.5 bg-[var(--color-surface)]">
-          <div className="relative">
-            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-ink-muted)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search Loss Ref / Cedant / Status"
-              className="pl-8 pr-3 h-9 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)] bg-[var(--color-surface-sunken)] text-[var(--color-ink)] w-56"
-            />
-          </div>
-
-          <div className="relative">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="appearance-none pl-3 pr-8 h-9 text-xs border border-[var(--color-line)] rounded-[var(--radius-control)] bg-[var(--color-surface-sunken)] text-[var(--color-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20 focus:border-[var(--color-brand)]"
-            >
-              <option>All statuses</option>
-              <option>MATCHED_1_TO_1</option>
-              <option>MATCHED_MULTIPLE</option>
-              <option>NOT_FOUND</option>
-              <option>INVALID_KEY</option>
-            </select>
-            <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-ink-muted)] text-[10px]">
-              ▼
-            </span>
-          </div>
-
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => selected && downloadReport(selected.id)}
-            disabled={!selected}
-            icon={ArrowTopRightOnSquareIcon}
-          >
-            View POV on Sheets
-          </Button>
-
-          <div className="flex-1" />
-          <span className="text-xs font-mono text-[var(--color-ink-muted)]">
-            {totalRows.toLocaleString("id-ID")} baris
-          </span>
-        </div>
-
-        {/* Tab pills */}
-        <div className="px-5 py-2.5 border-b border-[var(--color-line)] flex items-center gap-2 flex-wrap bg-[var(--color-surface)]">
-          {TAB_KEYS.map((key) => {
-            const isActive = tab === key;
-            const style = TAB_STYLE[key];
-            const count = tabCounts[key];
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setTab(key)}
-                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-colors cursor-pointer ${
-                  isActive ? style.active : style.idle
-                }`}
-              >
-                {TAB_LABELS[key]}
-                {count > 0 && (
-                  <span className={`ml-1.5 text-[10px] ${isActive ? "opacity-85" : "opacity-75"}`}>
-                    {count.toLocaleString("id-ID")}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Table */}
-        <div className="overflow-x-auto table-scroll">
-          <table className="min-w-full text-xs">
-            <thead>
-              <tr className="border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)]">
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap sticky left-0 bg-[var(--color-surface-sunken)] z-10">Run ID</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Match Status</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Cedant</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Sheet</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Loss Ref</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Outstanding</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Date of Loss</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Keterangan Loss Ref</th>
-                <th className="px-3 py-2.5 text-center text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">Master Same-Key Rows</th>
-                <th className="px-3 py-2.5 text-center text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">OSCLN Matched Rows</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">OSCLN Cedant Code(s)</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">OSCLN Loss Date (first)</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">OSCLN Our Loss (first)</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-semibold text-[var(--color-ink-muted)] uppercase tracking-wider whitespace-nowrap">OSCLN Row Numbers</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--color-line)]/60">
-              {loadingData && (
-                <tr><td colSpan={14} className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse">Memuat data…</td></tr>
-              )}
-              {!loadingData && !selected && (
-                <tr><td colSpan={14} className="text-center py-12 text-[var(--color-ink-muted)]">
-                  Belum ada data. Upload OSCLN CSV dan klik Run Two-Way Matching.
-                </td></tr>
-              )}
-              {!loadingData && rows.map((row, i) => {
-                const d = mapRow(row, i);
-                const outRaw = d.outstanding !== "—" ? String(d.outstanding).replace(/[^0-9.\-]/g, "") : null;
-                const outNum = outRaw ? Number(outRaw) : null;
-                const isNeg  = outNum !== null && outNum < 0;
-
-                return (
-                  <tr key={row.id} className="hover:bg-[var(--color-surface-sunken)]/60 transition-colors">
-                    <td className="px-3 py-1.5 font-mono text-xs text-[var(--color-ink-muted)] whitespace-nowrap sticky left-0 bg-[var(--color-surface)]">{d.runId}</td>
-                    <td className="px-3 py-1.5 whitespace-nowrap">
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${MATCH_BADGE[d.diffType] ?? "bg-[var(--color-surface-sunken)] text-[var(--color-ink-body)]"}`}>
-                        {TAB_LABELS[d.diffType] ?? d.diffType?.toUpperCase()}
+      {/* ══════════════════════════════════════════════════════════════════
+          TAB 0: CUSTOMIZE MATCHING (DATA MAPPING OS)
+         ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === "customize" && (
+        <div className="flex flex-col gap-5">
+          <Card className="p-5 space-y-5">
+            {/* Header Bar: Title + Searchable Pilih Tabel Database */}
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-4 border-b border-[var(--color-line)]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <ArrowsRightLeftIcon className="h-5 w-5 text-[var(--color-brand)]" />
+                  <h2 className="text-base font-bold text-[var(--color-ink)]">
+                    Data Mapping OS{" "}
+                    {selectedTable && (
+                      <span className="text-[var(--color-brand)] font-mono">
+                        : {selectedTable}
                       </span>
-                    </td>
-                    <td className="px-3 py-1.5 font-medium text-[var(--color-ink)] whitespace-nowrap">{d.cedant}</td>
-                    <td className="px-3 py-1.5 text-[var(--color-brand)] whitespace-nowrap">{d.sheet}</td>
-                    <td className="px-3 py-1.5 font-mono text-orange-700 whitespace-nowrap">{d.lossRef}</td>
-                    <td className={`px-3 py-1.5 text-right font-medium font-mono whitespace-nowrap ${isNeg ? "text-[var(--color-danger)]" : "text-[var(--color-ink)]"}`}>
-                      {outNum !== null
-                        ? isNeg
-                          ? `(${Math.abs(outNum).toLocaleString("id-ID", { minimumFractionDigits: 2 })})`
-                          : outNum.toLocaleString("id-ID", { minimumFractionDigits: 2 })
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-[var(--color-ink-muted)] whitespace-nowrap">{d.dol}</td>
-                    <td className="px-3 py-1.5 text-[var(--color-ink-muted)] max-w-[180px]">
-                      <span className="truncate block" title={d.ketLossRef}>{d.ketLossRef}</span>
-                    </td>
-                    <td className="px-3 py-1.5 text-center font-mono text-[var(--color-ink-body)]">{d.sameKeyRows}</td>
-                    <td className="px-3 py-1.5 text-center font-mono text-[var(--color-ink-body)]">{d.osclnMatched}</td>
-                    <td className="px-3 py-1.5 text-[var(--color-ink-body)] whitespace-nowrap">{d.osclnCedant}</td>
-                    <td className="px-3 py-1.5 text-[var(--color-ink-muted)] whitespace-nowrap">{d.osclnDol}</td>
-                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-ink)] font-medium whitespace-nowrap">
-                      {d.osclnLoss !== "—" ? Number(String(d.osclnLoss).replace(/[^0-9.\-]/g, "")).toLocaleString("id-ID") : "0"}
-                    </td>
-                    <td className="px-3 py-1.5 text-right font-mono text-[var(--color-ink-muted)]">{d.rowNum}</td>
-                  </tr>
-                );
-              })}
-              {!loadingData && selected && rows.length === 0 && (
-                <tr><td colSpan={14} className="text-center py-12 text-[var(--color-ink-muted)]">Tidak ada data untuk filter ini.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                    )}
+                  </h2>
+                </div>
+                <p className="text-xs text-[var(--color-ink-muted)] mt-1">
+                  Pilih POV, tabel hasil cedant di <code className="font-mono">hasil_rekonsiliasi</code>, lalu pasangkan kolom bebas untuk pencocokkan &amp; hitung selisih Outstanding.
+                </p>
+              </div>
 
-        {/* Pagination */}
-        <div className="px-5 py-3 bg-[var(--color-surface-sunken)] border-t border-[var(--color-line)] flex items-center justify-between">
-          <span className="text-xs text-[var(--color-ink-muted)]">
-            {totalRows > 0
-              ? `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, totalRows)} / ${totalRows.toLocaleString("id-ID")} · Page ${page + 1} / ${Math.max(1, totalPages)}`
-              : "Tidak ada data"}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0 || loadingData}
-              className="px-3 py-1.5 text-xs border border-[var(--color-line)] bg-[var(--color-surface)] rounded-[var(--radius-control)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)] transition-colors text-[var(--color-ink-body)] cursor-pointer"
+              {/* Searchable Dropdown: Pilih Tabel Database */}
+              <div className="w-full lg:w-80 relative" ref={tableDropdownRef}>
+                <label className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-ink-muted)] mb-1 block">
+                  Pilih Tabel Database (hasil_rekonsiliasi)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setTableDropdownOpen((o) => !o)}
+                  className="w-full h-10 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white flex items-center justify-between text-xs font-mono text-[var(--color-ink)] hover:border-[var(--color-brand)] transition-colors"
+                >
+                  <span className="truncate">
+                    {selectedTable || "Pilih tabel cedant..."}
+                  </span>
+                  <ChevronDownIcon className="h-4 w-4 text-[var(--color-ink-muted)] shrink-0" />
+                </button>
+
+                {tableDropdownOpen && (
+                  <div className="absolute right-0 top-full mt-1.5 z-40 w-full rounded-xl border border-[var(--color-line)] bg-white shadow-xl overflow-hidden">
+                    <div className="p-2 border-b border-[var(--color-line)]">
+                      <div className="relative">
+                        <MagnifyingGlassIcon className="h-3.5 w-3.5 text-[var(--color-ink-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={tableSearch}
+                          onChange={(e) => setTableSearch(e.target.value)}
+                          placeholder="Cari tabel..."
+                          autoFocus
+                          className="w-full h-8 pl-8 pr-2.5 text-xs rounded-lg border border-[var(--color-line)] focus:outline-none focus:border-[var(--color-brand)]"
+                        />
+                      </div>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto divide-y divide-[var(--color-line)]/50">
+                      {filteredTables.length === 0 ? (
+                        <div className="px-3 py-4 text-center text-xs text-[var(--color-ink-muted)]">
+                          Tidak ada tabel ditemukan di schema hasil_rekonsiliasi.
+                        </div>
+                      ) : (
+                        filteredTables.map((t) => {
+                          const isSel = t.table_name === selectedTable;
+                          return (
+                            <button
+                              key={t.table_name}
+                              type="button"
+                              onClick={() => {
+                                setSelectedTable(t.table_name);
+                                setReportingMonth("");
+                                setReportingYear("");
+                                setTableDropdownOpen(false);
+                                setTableSearch("");
+                                setPreviewData(null);
+                              }}
+                              className={`w-full px-3 py-2 text-left flex items-center justify-between gap-2 text-xs transition-colors ${
+                                isSel
+                                  ? "bg-[var(--color-brand)] text-white"
+                                  : "hover:bg-[var(--color-surface-sunken)] text-[var(--color-ink)]"
+                              }`}
+                            >
+                              <span className="font-mono truncate">{t.table_name}</span>
+                              <span
+                                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                                  isSel
+                                    ? "bg-white/20 text-white"
+                                    : "bg-[var(--color-surface-sunken)] text-[var(--color-ink-muted)]"
+                                }`}
+                              >
+                                {t.total_rows.toLocaleString("id-ID")} rows
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Row 1: POV Selector + Period Filter + Reset Button */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div className="md:col-span-4">
+                <label className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-ink-muted)] mb-1 block">
+                  Point of View (POV)
+                </label>
+                <select
+                  value={pov}
+                  onChange={(e) => {
+                    setPov(e.target.value);
+                    setPreviewData(null);
+                  }}
+                  className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs font-medium text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                >
+                  {POV_LIST.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:col-span-3">
+                <label className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-ink-muted)] mb-1 block">
+                  Periode Tabel Cedant (Opsional)
+                </label>
+                <select
+                  value={reportingYear && reportingMonth ? `${reportingYear}-${reportingMonth}` : ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) {
+                      setReportingYear("");
+                      setReportingMonth("");
+                    } else {
+                      const [y, m] = val.split("-");
+                      setReportingYear(y);
+                      setReportingMonth(m);
+                    }
+                  }}
+                  className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                >
+                  <option value="">Semua Periode</option>
+                  {(activeTableMeta?.periods || []).map((p) => (
+                    <option key={`${p.year}-${p.month}`} value={`${p.year}-${p.month}`}>
+                      {String(p.month).padStart(2, "0")}/{p.year}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:col-span-3">
+                <label className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-ink-muted)] mb-1 block">
+                  Filter Cedant OSCLN (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={cedantFilter}
+                  onChange={(e) => setCedantFilter(e.target.value)}
+                  placeholder="cth: ACA, MAXIMUS..."
+                  className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs text-[var(--color-ink)] placeholder:text-[var(--color-ink-muted)] focus:outline-none focus:border-[var(--color-brand)]"
+                />
+              </div>
+
+              <div className="md:col-span-2 flex justify-end">
+                <Button variant="secondary" size="sm" onClick={handleResetComparison}>
+                  Reset Perbandingan
+                </Button>
+              </div>
+            </div>
+
+            {/* Row 2: Dynamic Field Matching Pairs (Pilih Kolom Master = Pilih Kolom Cedant) */}
+            <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-sunken)]/40 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[var(--color-ink)]">
+                  Pasangan Kolom Pencocokkan (Key Matching)
+                </span>
+                <span className="text-[11px] text-[var(--color-ink-muted)]">
+                  Bebas pilih 1 atau beberapa kolom (Loss Ref, COB, DOL, dll.)
+                </span>
+              </div>
+
+              <div className="space-y-2.5">
+                {matchPairs.map((pair, idx) => (
+                  <div
+                    key={idx}
+                    className="grid grid-cols-1 md:grid-cols-11 gap-2 items-center"
+                  >
+                    <div className="md:col-span-5">
+                      {idx === 0 && (
+                        <label className="text-[11px] font-semibold text-[var(--color-ink-muted)] mb-1 block">
+                          Pilih Kolom Master ({sources?.fsi_source || "clickhouse.oscln"})
+                        </label>
+                      )}
+                      <select
+                        value={pair.master_col}
+                        onChange={(e) => handlePairChange(idx, "master_col", e.target.value)}
+                        className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs font-mono text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                      >
+                        <option value="">-- Pilih kolom Master OSCLN --</option>
+                        {fsiColumns.map((col) => (
+                          <option key={col.name} value={col.name}>
+                            {col.name} ({col.data_type})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-1 text-center font-bold text-[var(--color-ink-muted)] pt-0 md:pt-4">
+                      =
+                    </div>
+
+                    <div className="md:col-span-5 flex items-end gap-2">
+                      <div className="flex-1">
+                        {idx === 0 && (
+                          <label className="text-[11px] font-semibold text-[var(--color-ink-muted)] mb-1 block">
+                            Pilih Kolom Cedant ({selectedTable || "belum dipilih"})
+                          </label>
+                        )}
+                        <select
+                          value={pair.cedant_col}
+                          onChange={(e) => handlePairChange(idx, "cedant_col", e.target.value)}
+                          className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs font-mono text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                        >
+                          <option value="">-- Pilih kolom Cedant --</option>
+                          {cedantColumns.map((col) => (
+                            <option key={col.name} value={col.name}>
+                              {col.name} ({col.data_type})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {matchPairs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePair(idx)}
+                          className="h-9 w-9 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white flex items-center justify-center text-[var(--color-danger)] hover:bg-[var(--color-danger-soft)] transition-colors shrink-0"
+                          title="Hapus pasangan kolom"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-center pt-1">
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={PlusIcon}
+                  onClick={handleAddPair}
+                >
+                  Tambah Pencocokkan
+                </Button>
+              </div>
+            </div>
+
+            {/* Row 3: Outstanding Value Comparison (Master Outstanding = Pilih Cedant Outstanding) */}
+            <div className="rounded-xl border border-[var(--color-line)] bg-white p-4 space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-11 gap-2 items-end">
+                <div className="md:col-span-5">
+                  <label className="text-[11px] font-semibold text-[var(--color-ink-muted)] mb-1 block">
+                    Master Outstanding (Kolom Nilai Internal)
+                  </label>
+                  <select
+                    value={masterOutstandingCol}
+                    onChange={(e) => setMasterOutstandingCol(e.target.value)}
+                    className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs font-mono text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                  >
+                    <option value="">-- Tidak membandingkan nominal --</option>
+                    {fsiColumns.map((col) => (
+                      <option key={col.name} value={col.name}>
+                        {col.name} ({col.data_type})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="md:col-span-1 text-center font-bold text-[var(--color-ink-muted)] pb-2">
+                  =
+                </div>
+
+                <div className="md:col-span-5">
+                  <label className="text-[11px] font-semibold text-[var(--color-ink-muted)] mb-1 block">
+                    Pilih Cedant Outstanding (Kolom Nilai Pembanding)
+                  </label>
+                  <select
+                    value={cedantOutstandingCol}
+                    onChange={(e) => setCedantOutstandingCol(e.target.value)}
+                    className="w-full h-9 px-3 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-xs font-mono text-[var(--color-ink)] focus:outline-none focus:border-[var(--color-brand)]"
+                  >
+                    <option value="">-- Tidak membandingkan nominal --</option>
+                    {cedantColumns.map((col) => (
+                      <option key={col.name} value={col.name}>
+                        {col.name} ({col.data_type})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-xs text-[var(--color-ink-body)] cursor-pointer select-none pt-1">
+                <input
+                  type="checkbox"
+                  checked={aggregateInternal}
+                  onChange={(e) => setAggregateInternal(e.target.checked)}
+                  className="rounded border-[var(--color-line)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]"
+                />
+                <span>
+                  Akumulasi (SUM) nilai Net Internal per key jika terdapat beberapa baris dengan key sama
+                </span>
+              </label>
+            </div>
+
+            {/* Error / Success Messages */}
+            {actionError && (
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 text-xs text-[var(--color-danger)]">
+                <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
+                <span>{actionError}</span>
+              </div>
+            )}
+            {saveSuccess && (
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--color-valid-soft)] border border-[var(--color-valid)]/25 text-xs text-[var(--color-valid)]">
+                <div className="flex items-center gap-2">
+                  <CheckCircleIcon className="h-4 w-4 shrink-0" />
+                  <span>{saveSuccess.message}</span>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={ArrowDownTrayIcon}
+                  onClick={() => downloadReport(saveSuccess.job_id)}
+                >
+                  Export Excel
+                </Button>
+              </div>
+            )}
+
+            {/* Action Buttons: Bandingkan Data & Update Data Matching */}
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+              <Button
+                variant="primary"
+                onClick={handleCompare}
+                disabled={comparing || !sources?.fsi_connected || !selectedTable}
+              >
+                {comparing ? "Membandingkan..." : "Bandingkan Data"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleSaveMatching}
+                disabled={saving || !previewData}
+                className="!border-emerald-600 !bg-emerald-600 !text-white hover:!bg-emerald-700 disabled:opacity-40"
+              >
+                {saving ? "Menyimpan..." : "Update Data Matching"}
+              </Button>
+            </div>
+          </Card>
+
+          {/* ── KPI Summary & Result Table (after Bandingkan Data) ── */}
+          {previewData && (
+            <>
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <MetricTile
+                  label="Total Matched (ADA)"
+                  value={(previewData.summary.total_matched || 0).toLocaleString("id-ID")}
+                  hint={`Match Rate ${previewData.summary.match_rate_pct}%`}
+                  accent="valid"
+                />
+                <MetricTile
+                  label="Matched dgn Selisih"
+                  value={(previewData.summary.matched_diff || 0).toLocaleString("id-ID")}
+                  hint={`Exact: ${(previewData.summary.matched_exact || 0).toLocaleString("id-ID")}`}
+                  accent="warning"
+                />
+                <MetricTile
+                  label="Tidak Cocok (TIDAK ADA)"
+                  value={(previewData.summary.not_matched || 0).toLocaleString("id-ID")}
+                  hint={`Total Base: ${(previewData.summary.total_base_keys || 0).toLocaleString("id-ID")}`}
+                  accent="danger"
+                />
+                <MetricTile
+                  label="Total Master OS"
+                  value={fmtCurrency(previewData.summary.total_master_outstanding)}
+                  hint={previewData.summary.master_outstanding_col || "—"}
+                />
+                <MetricTile
+                  label="Total Selisih (Variance)"
+                  value={fmtCurrency(previewData.summary.total_variance)}
+                  hint={`Cedant OS: ${fmtCurrency(previewData.summary.total_cedant_outstanding)}`}
+                  accent={previewData.summary.total_variance === 0 ? "valid" : "danger"}
+                />
+              </div>
+
+              <Card className="overflow-hidden">
+                <div className="p-4 border-b border-[var(--color-line)] flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <TableCellsIcon className="h-4 w-4 text-[var(--color-brand)]" />
+                    <h3 className="text-sm font-bold text-[var(--color-ink)]">
+                      {previewData.summary.pov_label} ({previewData.summary.total_matched} Matched)
+                    </h3>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {[
+                      { id: "ALL", label: `Semua (${previewData.rows.length})` },
+                      { id: "matched_exact", label: `ADA - Exact (${previewData.summary.matched_exact})` },
+                      { id: "matched_diff", label: `ADA - Selisih (${previewData.summary.matched_diff})` },
+                      { id: "not_matched", label: `TIDAK ADA (${previewData.summary.not_matched})` },
+                    ].map((pill) => (
+                      <button
+                        key={pill.id}
+                        type="button"
+                        onClick={() => {
+                          setStatusFilter(pill.id);
+                          setPage(0);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                          statusFilter === pill.id
+                            ? "bg-[var(--color-brand)] text-white"
+                            : "bg-[var(--color-surface-sunken)] text-[var(--color-ink-body)] hover:bg-[var(--color-line)]/60"
+                        }`}
+                      >
+                        {pill.label}
+                      </button>
+                    ))}
+
+                    <div className="relative">
+                      <MagnifyingGlassIcon className="h-3.5 w-3.5 text-[var(--color-ink-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={rowSearch}
+                        onChange={(e) => {
+                          setRowSearch(e.target.value);
+                          setPage(0);
+                        }}
+                        placeholder="Cari key / isi baris..."
+                        className="h-8 pl-8 pr-3 rounded-lg border border-[var(--color-line)] text-xs bg-white focus:outline-none focus:border-[var(--color-brand)]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto table-scroll">
+                  <table className="min-w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[11px] uppercase font-bold text-[var(--color-ink-muted)]">
+                        <th className="px-3 py-2.5 text-left whitespace-nowrap">No</th>
+                        <th className="px-3 py-2.5 text-left whitespace-nowrap">Ketersediaan</th>
+                        <th className="px-3 py-2.5 text-left whitespace-nowrap">Match Key</th>
+                        <th className="px-3 py-2.5 text-right whitespace-nowrap">Master OS</th>
+                        <th className="px-3 py-2.5 text-right whitespace-nowrap">Cedant OS</th>
+                        <th className="px-3 py-2.5 text-right whitespace-nowrap">Selisih (Variance)</th>
+                        {visibleBaseCols.map((col) => (
+                          <th key={col} className="px-3 py-2.5 text-left whitespace-nowrap">
+                            {col}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--color-line)]/60">
+                      {pagedPreviewRows.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={6 + visibleBaseCols.length}
+                            className="py-10 text-center text-[var(--color-ink-muted)]"
+                          >
+                            Tidak ada baris yang cocok dengan filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        pagedPreviewRows.map((row, i) => {
+                          const hasDiff = row.match_status === "matched_diff";
+                          const isAda = row.ketersediaan === "ADA";
+                          return (
+                            <tr
+                              key={`${row.match_key}-${i}`}
+                              className="hover:bg-[var(--color-surface-sunken)]/50 transition-colors"
+                            >
+                              <td className="px-3 py-2 font-mono text-[var(--color-ink-muted)]">
+                                {page * PAGE_SIZE + i + 1}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                    isAda
+                                      ? hasDiff
+                                        ? "bg-amber-50 text-amber-700 border-amber-200"
+                                        : "bg-[var(--color-valid-soft)] text-[var(--color-valid)] border-[var(--color-valid)]/25"
+                                      : "bg-[var(--color-danger-soft)] text-[var(--color-danger)] border-[var(--color-danger)]/25"
+                                  }`}
+                                >
+                                  {isAda ? (hasDiff ? "ADA (SELISIH)" : "ADA") : "TIDAK ADA"}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                                {row.match_key}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono whitespace-nowrap">
+                                {fmtCurrency(row.master_outstanding)}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono whitespace-nowrap">
+                                {fmtCurrency(row.cedant_outstanding)}
+                              </td>
+                              <td
+                                className={`px-3 py-2 text-right font-mono font-bold whitespace-nowrap ${
+                                  row.variance !== 0
+                                    ? "text-[var(--color-danger)]"
+                                    : "text-[var(--color-valid)]"
+                                }`}
+                              >
+                                {fmtCurrency(row.variance)}
+                              </td>
+                              {visibleBaseCols.map((col) => (
+                                <td
+                                  key={col}
+                                  className="px-3 py-2 text-[var(--color-ink-body)] max-w-[200px] truncate"
+                                  title={String(row.base_row?.[col] ?? "")}
+                                >
+                                  {row.base_row?.[col] ?? "—"}
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {totalPreviewPages > 1 && (
+                  <div className="px-4 py-3 border-t border-[var(--color-line)] flex items-center justify-between text-xs text-[var(--color-ink-muted)]">
+                    <span>
+                      Halaman {page + 1} dari {totalPreviewPages} ({filteredPreviewRows.length.toLocaleString("id-ID")} baris)
+                    </span>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
+                        size="xs"
+                        disabled={page === 0}
+                        onClick={() => setPage((p) => Math.max(0, p - 1))}
+                      >
+                        Sebelumnya
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="xs"
+                        disabled={page + 1 >= totalPreviewPages}
+                        onClick={() => setPage((p) => p + 1)}
+                      >
+                        Berikutnya
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          TABS 1–5: SUMMARY & 4 POV VIEWS (HASIL MATCHING TERSIMPAN)
+         ══════════════════════════════════════════════════════════════════ */}
+      {activeTab !== "customize" && (
+        <div className="flex flex-col gap-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-[var(--color-ink)]">
+                {WORKSPACE_TABS.find((t) => t.id === activeTab)?.label}
+              </h2>
+              <p className="text-xs text-[var(--color-ink-muted)]">
+                Menampilkan riwayat hasil matching tersimpan. Klik <strong>Update Data Matching</strong> pada tab Customize Matching untuk menambah atau memperbarui data.
+              </p>
+            </div>
+            <Button
+              variant="primary"
+              size="xs"
+              icon={PlusIcon}
+              onClick={() => {
+                if (activeTab !== "summary") setPov(activeTab);
+                setActiveTab("customize");
+              }}
             >
-              &larr; Previous
-            </button>
-            <span className="text-xs font-semibold font-mono text-[var(--color-ink)] min-w-[70px] text-center">
-              Page {page + 1} / {Math.max(1, totalPages)}
-            </span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1 || loadingData}
-              className="px-3 py-1.5 text-xs border border-[var(--color-line)] bg-[var(--color-surface)] rounded-[var(--radius-control)] disabled:opacity-40 hover:bg-[var(--color-brand-soft)] transition-colors text-[var(--color-ink-body)] cursor-pointer"
-            >
-              Next &rarr;
-            </button>
+              Jalankan Matching Baru
+            </Button>
           </div>
-        </div>
 
-        {/* Footer note */}
-        <div className="px-5 py-3 bg-[var(--color-surface-sunken)] border-t border-[var(--color-line)] text-[11px] text-[var(--color-ink-muted)]">
-          Hasil tersimpan dalam dua tab: MATCH_INBOUND_TO_OSCLN dan MATCH_OSCLN_TO_MASTER. Snapshot original CSV OSCLN tetap disimpan di Drive untuk audit.
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[11px] uppercase font-bold text-[var(--color-ink-muted)]">
+                    <th className="px-4 py-3 text-left">POV</th>
+                    <th className="px-4 py-3 text-left">Tabel Cedant</th>
+                    <th className="px-4 py-3 text-left">Aturan Matching</th>
+                    <th className="px-4 py-3 text-left">Periode</th>
+                    <th className="px-4 py-3 text-right">Matched Exact</th>
+                    <th className="px-4 py-3 text-right">Matched Selisih</th>
+                    <th className="px-4 py-3 text-right">Only Internal</th>
+                    <th className="px-4 py-3 text-right">Only Cedant</th>
+                    <th className="px-4 py-3 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-line)]/60">
+                  {loadingHistory ? (
+                    <tr>
+                      <td colSpan={9} className="py-10 text-center text-[var(--color-ink-muted)]">
+                        Memuat riwayat matching...
+                      </td>
+                    </tr>
+                  ) : povHistoryItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-12 text-center text-[var(--color-ink-muted)]">
+                        <FunnelIcon className="h-6 w-6 mx-auto mb-2 opacity-40" />
+                        Belum ada hasil matching tersimpan untuk POV ini.
+                      </td>
+                    </tr>
+                  ) : (
+                    povHistoryItems.map((item) => (
+                      <tr
+                        key={item.job_id}
+                        className="hover:bg-[var(--color-surface-sunken)]/50 transition-colors"
+                      >
+                        <td className="px-4 py-2.5 font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                          {item.pov_label}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-[var(--color-brand)] whitespace-nowrap">
+                          {item.result_table}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-[var(--color-ink-body)]">
+                          {item.match_expression}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono whitespace-nowrap">
+                          {item.bulan}/{item.tahun}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono font-semibold text-[var(--color-valid)]">
+                          {item.matched_exact.toLocaleString("id-ID")}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono font-semibold text-amber-600">
+                          {item.matched_diff.toLocaleString("id-ID")}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-[var(--color-danger)]">
+                          {item.only_in_internal.toLocaleString("id-ID")}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-orange-600">
+                          {item.only_in_cedant.toLocaleString("id-ID")}
+                        </td>
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap space-x-1.5">
+                          <Button
+                            variant="secondary"
+                            size="xs"
+                            onClick={() => handleOpenHistoryJob(item)}
+                          >
+                            Detail
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="xs"
+                            icon={ArrowDownTrayIcon}
+                            onClick={() => downloadReport(item.job_id)}
+                          >
+                            Excel
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          {/* Detail Saved Job Drawer/Card */}
+          {selectedHistoryJob && (
+            <Card className="overflow-hidden">
+              <div className="p-4 border-b border-[var(--color-line)] flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--color-ink)]">
+                    Detail Matching #{selectedHistoryJob.job_id} — {selectedHistoryJob.result_table}
+                  </h3>
+                  <p className="text-xs text-[var(--color-ink-muted)] font-mono">
+                    {selectedHistoryJob.pov_label} | {selectedHistoryJob.match_expression}
+                  </p>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={ArrowDownTrayIcon}
+                  onClick={() => downloadReport(selectedHistoryJob.job_id)}
+                >
+                  Download Excel
+                </Button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[var(--color-surface-sunken)] border-b border-[var(--color-line)] text-[11px] uppercase font-bold text-[var(--color-ink-muted)]">
+                      <th className="px-3 py-2.5 text-left">Match Key</th>
+                      <th className="px-3 py-2.5 text-left">Ketersediaan</th>
+                      <th className="px-3 py-2.5 text-right">Master OS</th>
+                      <th className="px-3 py-2.5 text-right">Cedant OS</th>
+                      <th className="px-3 py-2.5 text-right">Selisih (Variance)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-line)]/60">
+                    {loadingJobRows ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-[var(--color-ink-muted)]">
+                          Memuat detail baris...
+                        </td>
+                      </tr>
+                    ) : (
+                      (historyJobRows?.results || []).map((row) => {
+                        const a = row.row_data_a || {};
+                        const ketersediaan = a.__ketersediaan || (row.diff_type === "matched" || row.diff_type === "changed" ? "ADA" : "TIDAK ADA");
+                        const variance = a.__variance ?? 0;
+                        return (
+                          <tr key={row.id} className="hover:bg-[var(--color-surface-sunken)]/40">
+                            <td className="px-3 py-2 font-mono font-semibold">
+                              {row.primary_key_value}
+                            </td>
+                            <td className="px-3 py-2">
+                              <Badge tone={ketersediaan === "ADA" ? "valid" : "danger"}>
+                                {ketersediaan}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {fmtCurrency(a.__master_outstanding)}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              {fmtCurrency(a.__cedant_outstanding)}
+                            </td>
+                            <td
+                              className={`px-3 py-2 text-right font-mono font-bold ${
+                                variance !== 0 ? "text-[var(--color-danger)]" : "text-[var(--color-valid)]"
+                              }`}
+                            >
+                              {fmtCurrency(variance)}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
-      </Card>
+      )}
     </div>
   );
 }

@@ -7,7 +7,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
-from .models.database import engine
+from .models.database import engine, fsi_engine, FSI_DB_SCHEMA, FSI_OSCLN_TABLE
 from .routers import compare_router, master_router, oscln_router
 
 logging.basicConfig(
@@ -50,11 +50,30 @@ def root():
 
 @app.get("/health", tags=["health"])
 def health(response: Response):
+    fsi_status = "not_configured"
+    if fsi_engine is not None:
+        try:
+            with fsi_engine.connect() as fsi_conn:
+                fsi_conn.execute(text("SELECT 1")).scalar_one()
+            fsi_status = "connected"
+        except SQLAlchemyError:
+            logger.warning("FSI DB health check failed")
+            fsi_status = "disconnected"
+
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1")).scalar_one()
     except SQLAlchemyError:
         logger.exception("Database health check failed")
         response.status_code = 503
-        return {"status": "unhealthy", "database": "disconnected"}
-    return {"status": "healthy", "database": "connected"}
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "fsi_database": fsi_status,
+        }
+    return {
+        "status": "healthy",
+        "database": "connected",
+        "fsi_database": fsi_status,
+        "fsi_source": f"{FSI_DB_SCHEMA}.{FSI_OSCLN_TABLE}",
+    }

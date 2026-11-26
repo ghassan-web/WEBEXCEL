@@ -60,7 +60,7 @@ export const NAVIGATION_GROUPS = [
         label: "OSCLN Reconciliation",
         icon: ArrowsRightLeftIcon,
         breadcrumb: "Claims Workspace / OSCLN Reconciliation",
-        description: "Rekonsiliasi dua arah antara Master Data dengan snapshot CSV sistem OSCLN",
+        description: "Customize Matching OSCLN Internal (fsi_db.clickhouse.oscln) terhadap tabel hasil per-cedant (hasil_rekonsiliasi)",
       },
       {
         id: "library",

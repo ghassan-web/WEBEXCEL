@@ -6,7 +6,7 @@ import {
   prepareMasterUpload,
   skipMasterUploadSheet,
 } from "../services/api";
-import { Button, Badge } from "../components/ui";
+import { Button, Badge, PageHeader } from "../components/ui";
 import {
   ArrowUpTrayIcon,
   ArrowPathIcon,
@@ -21,6 +21,9 @@ import {
   DocumentTextIcon,
   InformationCircleIcon,
   CircleStackIcon,
+  LockClosedIcon,
+  EyeIcon,
+  EyeSlashIcon,
 } from "@heroicons/react/24/outline";
 
 const MONTHS = [
@@ -347,6 +350,20 @@ export default function ComparePage({ onNavigate }) {
   const [preparedUpload, setPreparedUpload] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
 
+  /* ── Excel Password Modal State (disimpan sementara di memory saja) ── */
+  const [excelPassword, setExcelPassword] = useState("");
+  const [passwordModal, setPasswordModal] = useState({
+    open: false,
+    input: "",
+    showPassword: false,
+    error: "",
+    submitting: false,
+    pendingAction: null, // 'inspect' | 'prepare'
+    pendingFile: null,
+    pendingCedant: null,
+    skipSelected: false,
+  });
+
   const isInfopack = activeTab === "infopack";
   const tipeData = isInfopack ? "Infopack" : "OS Cedant";
   const mappingRuleFields =
@@ -454,6 +471,83 @@ export default function ComparePage({ onNavigate }) {
     return inspectData.sheet_row_counts?.[selectedSheet] ?? 0;
   }, [inspectData, selectedSheet]);
 
+  /* ── Jalankan Header Scanner (/api/master/inspect) dengan dukungan password opsional ── */
+  const runInspectFile = async (rawFile, activeCedantObj, passwordValue = "") => {
+    setIsInspecting(true);
+    setErrorMessage("");
+    try {
+      const fd = new FormData();
+      fd.append("file", rawFile);
+      fd.append("tipe_data", tipeData);
+      if (activeCedantObj?.name) fd.append("cedant", activeCedantObj.name);
+      if (activeCedantObj?.code) fd.append("cedant_code", activeCedantObj.code);
+      if (passwordValue) fd.append("excel_password", passwordValue);
+
+      const res = await inspectMasterFile(fd);
+      setInspectData(res);
+      if (passwordValue) {
+        setExcelPassword(passwordValue);
+      }
+      setPasswordModal((prev) => ({
+        ...prev,
+        open: false,
+        input: "",
+        error: "",
+        submitting: false,
+      }));
+
+      let resolvedCedant = activeCedantObj;
+      if (!resolvedCedant && res.cedant_code) {
+        resolvedCedant = {
+          name: res.cedant_name || res.cedant_code,
+          code: res.cedant_code,
+          sheets: "All sheets",
+        };
+        setSelectedCedant(resolvedCedant);
+      }
+
+      const defSheet = res.default_sheet || res.available_sheets?.[0] || "";
+      setSelectedSheet(defSheet);
+
+      const cols = res.sheet_columns?.[defSheet] || [];
+      const prof = allProfilesForTab.find((p) => p.cedant === resolvedCedant?.name) || null;
+      const initialTargetMap = matchExcelColumnsToTargets(
+        cols,
+        isInfopack ? null : prof,
+        targetSearchColumns
+      );
+      const backendMap = res.auto_mappings?.[defSheet] || {};
+      setMapping(keepMappingsPresentInHeaders({
+        ...initialTargetMap,
+        ...(!isInfopack ? prof?.mapping || {} : {}),
+        ...backendMap,
+      }, cols, targetSearchColumns));
+      setPreparedUpload(null);
+      return true;
+    } catch (err) {
+      if (err.code === "EXCEL_PASSWORD_REQUIRED" || err.code === "EXCEL_PASSWORD_INVALID") {
+        setPasswordModal({
+          open: true,
+          input: "",
+          showPassword: false,
+          error: err.code === "EXCEL_PASSWORD_INVALID" ? err.message : "",
+          submitting: false,
+          pendingAction: "inspect",
+          pendingFile: rawFile,
+          pendingCedant: activeCedantObj,
+          skipSelected: false,
+        });
+        setInspectData(null);
+        return false;
+      }
+      setErrorMessage(err.message || "Gagal memindai header file Excel. Pastikan backend berjalan di port 8000.");
+      setInspectData(null);
+      return false;
+    } finally {
+      setIsInspecting(false);
+    }
+  };
+
   /* ── Handle File Drop / Select & Run Header Scanner (/api/master/inspect) ── */
   const handleSelectFile = async (rawFile) => {
     if (!rawFile) return;
@@ -466,6 +560,7 @@ export default function ComparePage({ onNavigate }) {
     setErrorMessage("");
     setFile(rawFile);
     setUploadResult(null);
+    setExcelPassword("");
 
     /* Auto-detect bulan & tahun dari nama file */
     const { month: detM, year: detY } = detectMonthYearFromFilename(rawFile.name);
@@ -490,49 +585,7 @@ export default function ComparePage({ onNavigate }) {
       }
     }
 
-    /* Jalankan scan header ke backend */
-    setIsInspecting(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", rawFile);
-      fd.append("tipe_data", tipeData);
-      if (activeCedantObj?.name) fd.append("cedant", activeCedantObj.name);
-      if (activeCedantObj?.code) fd.append("cedant_code", activeCedantObj.code);
-
-      const res = await inspectMasterFile(fd);
-      setInspectData(res);
-      if (!activeCedantObj && res.cedant_code) {
-        activeCedantObj = {
-          name: res.cedant_name || res.cedant_code,
-          code: res.cedant_code,
-          sheets: "All sheets",
-        };
-        setSelectedCedant(activeCedantObj);
-      }
-
-      const defSheet = res.default_sheet || res.available_sheets?.[0] || "";
-      setSelectedSheet(defSheet);
-
-      const cols = res.sheet_columns?.[defSheet] || [];
-      const prof = allProfilesForTab.find((p) => p.cedant === activeCedantObj?.name) || null;
-      const initialTargetMap = matchExcelColumnsToTargets(
-        cols,
-        isInfopack ? null : prof,
-        targetSearchColumns
-      );
-      const backendMap = res.auto_mappings?.[defSheet] || {};
-      setMapping(keepMappingsPresentInHeaders({
-        ...initialTargetMap,
-        ...(!isInfopack ? prof?.mapping || {} : {}),
-        ...backendMap,
-      }, cols, targetSearchColumns));
-      setPreparedUpload(null);
-    } catch (err) {
-      setErrorMessage(err.message || "Gagal memindai header file Excel. Pastikan backend berjalan di port 8000.");
-      setInspectData(null);
-    } finally {
-      setIsInspecting(false);
-    }
+    await runInspectFile(rawFile, activeCedantObj, "");
   };
 
   /* Saat user mengganti sheet aktif, jalankan pencocokan ulang untuk sheet tersebut */
@@ -613,12 +666,13 @@ export default function ComparePage({ onNavigate }) {
     (isInfopack && !hasInfopackOutstandingMapping ? 1 : 0);
 
   /* ── Eksekusi Simpan ke Master Database (Step 2 -> Step 3) ── */
-  const executeUpload = async ({ skipSelected = false } = {}) => {
+  const executeUpload = async ({ skipSelected = false, passwordOverride = null } = {}) => {
     if (!file) return;
     setCurrentStep("EXECUTING");
     setSubmitting(true);
     setUploadPct(0);
     setErrorMessage("");
+    const activePassword = passwordOverride !== null ? passwordOverride : excelPassword;
 
     try {
       let prepared = preparedUpload;
@@ -638,6 +692,7 @@ export default function ComparePage({ onNavigate }) {
         if (cedantName) fd.append("cedant", cedantName);
         if (cedantCode) fd.append("cedant_code", cedantCode);
         if (skipSelected) fd.append("skip_sheet_name", selectedSheet);
+        if (activePassword) fd.append("excel_password", activePassword);
         fd.append("file", file);
         prepared = await prepareMasterUpload(fd, (pct) => setUploadPct(pct));
         setPreparedUpload(prepared);
@@ -814,10 +869,69 @@ export default function ComparePage({ onNavigate }) {
       setUploadResult(res);
       setCurrentStep("SUCCESS");
     } catch (err) {
-      setErrorMessage(err.message || "Gagal menyimpan data ke Master.");
-      setCurrentStep("MAPPING");
+      if (err.code === "EXCEL_PASSWORD_REQUIRED" || err.code === "EXCEL_PASSWORD_INVALID") {
+        setPasswordModal({
+          open: true,
+          input: "",
+          showPassword: false,
+          error: err.code === "EXCEL_PASSWORD_INVALID" ? err.message : "",
+          submitting: false,
+          pendingAction: "prepare",
+          pendingFile: file,
+          pendingCedant: selectedCedant,
+          skipSelected,
+        });
+        setCurrentStep("MAPPING");
+      } else {
+        setErrorMessage(err.message || "Gagal menyimpan data ke Master.");
+        setCurrentStep("MAPPING");
+      }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handlePasswordModalSubmit = async (e) => {
+    e?.preventDefault();
+    const pwd = passwordModal.input.trim();
+    if (!pwd) {
+      setPasswordModal((prev) => ({
+        ...prev,
+        error: "Password tidak boleh kosong.",
+      }));
+      return;
+    }
+    setPasswordModal((prev) => ({ ...prev, submitting: true, error: "" }));
+    if (passwordModal.pendingAction === "inspect") {
+      await runInspectFile(passwordModal.pendingFile, passwordModal.pendingCedant, pwd);
+    } else if (passwordModal.pendingAction === "prepare") {
+      setExcelPassword(pwd);
+      setPasswordModal((prev) => ({ ...prev, open: false, submitting: false }));
+      await executeUpload({
+        skipSelected: passwordModal.skipSelected,
+        passwordOverride: pwd,
+      });
+    }
+  };
+
+  const handlePasswordModalClose = () => {
+    const wasInspect = passwordModal.pendingAction === "inspect";
+    setPasswordModal({
+      open: false,
+      input: "",
+      showPassword: false,
+      error: "",
+      submitting: false,
+      pendingAction: null,
+      pendingFile: null,
+      pendingCedant: null,
+      skipSelected: false,
+    });
+    if (wasInspect) {
+      setFile(null);
+      setInspectData(null);
+      setExcelPassword("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -848,6 +962,8 @@ export default function ComparePage({ onNavigate }) {
     setUploadPct(0);
     setCurrentStep("UPLOAD");
     setPreparedUpload(null);
+    setExcelPassword("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const activeStepOrder =
@@ -856,7 +972,12 @@ export default function ComparePage({ onNavigate }) {
       : WIZARD_STEPS.findIndex((s) => s.id === currentStep);
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-4 sm:px-6 py-6 space-y-6 font-sans saas-page-enter">
+    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans text-[var(--color-ink)] saas-page-enter">
+      <PageHeader
+        title="Upload Data"
+        description="Unggah workbook Excel OS Claim Cedant atau InfoPack (termasuk file ber-password), pindai header, dan simpan ke Master & hasil_rekonsiliasi."
+      />
+
       {/* ── Connected 3-Step Wizard Bar ── */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-[var(--radius-surface)] px-5 py-3.5 shadow-[var(--shadow-card)] flex flex-wrap items-center justify-between gap-4">
         {WIZARD_STEPS.map((step, idx) => {
@@ -1786,6 +1907,118 @@ export default function ComparePage({ onNavigate }) {
                 Lihat di Master Data (Semua Kolom)
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          MODAL: INPUT PASSWORD EXCEL TERPROTEKSI
+         ══════════════════════════════════════════════════════════════════ */}
+      {passwordModal.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-[2px] p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="excel-password-modal-title"
+        >
+          <div className="w-full max-w-md bg-white rounded-2xl border border-[var(--color-line)] shadow-xl overflow-hidden">
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)]/50">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                  <LockClosedIcon className="h-4 w-4 text-amber-600" />
+                </div>
+                <div>
+                  <h3
+                    id="excel-password-modal-title"
+                    className="text-sm font-bold text-[var(--color-ink)]"
+                  >
+                    File Excel Dilindungi Password
+                  </h3>
+                  <p className="text-[11px] text-[var(--color-ink-muted)] mt-0.5 truncate max-w-[260px]">
+                    {passwordModal.pendingFile?.name || file?.name || "Workbook terenkripsi"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handlePasswordModalClose}
+                className="p-1 rounded-lg text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-sunken)] transition-colors"
+                aria-label="Tutup modal password"
+              >
+                <XMarkIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handlePasswordModalSubmit} className="p-5 space-y-4">
+              <p className="text-xs text-[var(--color-ink-body)] leading-relaxed">
+                Masukkan password untuk membuka dan memindai sheet pada file Excel ini.
+                Password hanya digunakan sementara saat proses baca dan <strong>tidak disimpan</strong> di server.
+              </p>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[var(--color-ink)] block">
+                  Password Excel
+                </label>
+                <div className="relative">
+                  <input
+                    type={passwordModal.showPassword ? "text" : "password"}
+                    value={passwordModal.input}
+                    onChange={(e) =>
+                      setPasswordModal((prev) => ({
+                        ...prev,
+                        input: e.target.value,
+                        error: "",
+                      }))
+                    }
+                    autoFocus
+                    placeholder="Masukkan password file..."
+                    className="w-full h-10 pl-3 pr-10 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/25 focus:border-[var(--color-brand)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPasswordModal((prev) => ({
+                        ...prev,
+                        showPassword: !prev.showPassword,
+                      }))
+                    }
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                    aria-label={passwordModal.showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                  >
+                    {passwordModal.showPassword ? (
+                      <EyeSlashIcon className="h-4 w-4" />
+                    ) : (
+                      <EyeIcon className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+
+                {passwordModal.error && (
+                  <div className="flex items-center gap-1.5 text-xs text-[var(--color-danger)] bg-[var(--color-danger-soft)]/70 border border-[var(--color-danger)]/20 rounded-lg px-2.5 py-2 mt-2">
+                    <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
+                    <span>{passwordModal.error}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--color-line)]">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handlePasswordModalClose}
+                  disabled={passwordModal.submitting}
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={passwordModal.submitting || !passwordModal.input.trim()}
+                >
+                  {passwordModal.submitting ? "Membuka File..." : "Buka File"}
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

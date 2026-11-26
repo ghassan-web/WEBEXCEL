@@ -125,36 +125,66 @@ KBINS_TIPE_DATA = "KB INS"
 KBINS_SHEET_NAME = "2.11"
 
 
+class ExcelPasswordRequiredError(ValueError):
+    """Raised when an uploaded Excel workbook is encrypted and no password was provided."""
+
+
+class ExcelPasswordInvalidError(ValueError):
+    """Raised when the provided password cannot decrypt an encrypted Excel workbook."""
+
+
+def is_excel_encrypted(file_bytes: bytes) -> bool:
+    """
+    Deteksi apakah file Excel (XLS/XLSX/XLSM/XLSB) terenkripsi password menggunakan msoffcrypto.
+    Aman dipanggil untuk semua file; mengembalikan False jika bukan file OLE2 terenkripsi.
+    """
+    try:
+        office_file = msoffcrypto.OfficeFile(BytesIO(file_bytes))
+        return bool(office_file.is_encrypted())
+    except Exception:
+        return False
+
+
 def read_excel_with_password(file_bytes: bytes, password: str | None = None) -> BytesIO:
     """
-    Membuka file Excel yang dienkripsi dengan password (format OLE2 / XLS).
-    Password diambil dari env var EXCEL_PASSWORD jika tidak diberikan secara eksplisit.
-    Mengembalikan BytesIO berisi bytes workbook yang sudah didekripsi.
+    Membuka file Excel yang dienkripsi dengan password (format OLE2 / XLS / XLSX).
     Jika file tidak terenkripsi, langsung kembalikan BytesIO dari file_bytes asli.
+    Password harus diberikan secara eksplisit oleh user (pop-up input).
 
     Raises:
-        ValueError       – jika password belum dikonfigurasi
-        InvalidKeyError  – jika password salah
+        ExcelPasswordRequiredError – jika file terenkripsi tetapi password kosong
+        ExcelPasswordInvalidError  – jika password salah
     """
-    password = password or os.getenv("EXCEL_PASSWORD")
-    if not password:
-        raise ValueError(
-            "Password Excel belum dikonfigurasi. "
-            "Tambahkan EXCEL_PASSWORD ke file .env."
+    source = BytesIO(file_bytes)
+    try:
+        office_file = msoffcrypto.OfficeFile(source)
+        encrypted = bool(office_file.is_encrypted())
+    except Exception:
+        return BytesIO(file_bytes)
+
+    if not encrypted:
+        return BytesIO(file_bytes)
+
+    effective_password = (password or "").strip()
+    if not effective_password:
+        raise ExcelPasswordRequiredError(
+            "File Excel ini dilindungi password. Silakan masukkan password untuk membuka file."
         )
 
-    source = BytesIO(file_bytes)
-    office_file = msoffcrypto.OfficeFile(source)
-
-    if office_file.is_encrypted():
-        office_file.load_key(password=password)
+    try:
+        office_file.load_key(password=effective_password)
         decrypted = BytesIO()
         office_file.decrypt(decrypted)
         decrypted.seek(0)
         return decrypted
-
-    # File tidak terenkripsi — kembalikan bytes asli
-    return BytesIO(file_bytes)
+    except InvalidKeyError as exc:
+        raise ExcelPasswordInvalidError(
+            "Password Excel salah. Silakan periksa kembali dan coba lagi."
+        ) from exc
+    except Exception as exc:
+        raise ExcelPasswordInvalidError(
+            f"Gagal membuka enkripsi file Excel. Pastikan password benar."
+        ) from exc
 
 
 def read_kbins_sheet(file_bytes: bytes) -> pd.DataFrame:
@@ -1410,7 +1440,7 @@ def compare_dataframes(
     }
 
 
-def inspect_excel_workbook(file_bytes: bytes) -> dict:
+def inspect_excel_workbook(file_bytes: bytes, password: str | None = None) -> dict:
     """
     Scan seluruh sheet pada file Excel untuk mengekstrak:
     - daftar sheet yang tersedia (`available_sheets`)
@@ -1419,6 +1449,8 @@ def inspect_excel_workbook(file_bytes: bytes) -> dict:
     - jumlah baris per sheet (`sheet_row_counts`)
     - `default_sheet` terbaik yang memiliki kolom bermakna
     """
+    if is_excel_encrypted(file_bytes):
+        file_bytes = read_excel_with_password(file_bytes, password=password).getvalue()
     workbook, _ = _open_excel_file(file_bytes)
     sheets = list(workbook.sheet_names)
     sheet_columns: dict[str, list[str]] = {}

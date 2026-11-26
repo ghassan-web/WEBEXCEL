@@ -121,6 +121,45 @@ def _synchronize_header_library_identity(db: Session) -> None:
     )
 
 
+def _synchronize_mapping_table_identity(db: Session, mapping_table: str) -> None:
+    """
+    Sinkronkan identity sequence `mapping_id` pada master_mapping_column(_infopack)
+    sebelum INSERT agar tidak pernah bentrok UniqueViolation setelah seed/import DB.
+    """
+    allowed_tables = {
+        "rekonsiliasi.master_mapping_column",
+        "rekonsiliasi.master_mapping_column_infopack",
+    }
+    if mapping_table not in allowed_tables:
+        return
+    sequence_name = db.execute(
+        text("SELECT pg_get_serial_sequence(:table_name, 'mapping_id')"),
+        {"table_name": mapping_table},
+    ).scalar_one_or_none()
+    if not sequence_name:
+        return
+
+    db.execute(text(f"LOCK TABLE {mapping_table} IN SHARE ROW EXCLUSIVE MODE"))
+    db.execute(
+        text(
+            "WITH table_state AS ("
+            f"SELECT COALESCE(MAX(mapping_id), 0) AS max_id FROM {mapping_table}"
+            "), sequence_state AS ("
+            "SELECT last_value FROM pg_sequences "
+            "WHERE to_regclass(format('%I.%I', schemaname, sequencename)) "
+            "= CAST(:sequence_name AS regclass)"
+            ") "
+            "SELECT setval("
+            "CAST(:sequence_name AS regclass), "
+            "GREATEST(table_state.max_id, COALESCE(sequence_state.last_value, 0), 1), "
+            "table_state.max_id > 0 OR COALESCE(sequence_state.last_value, 0) > 0"
+            ") "
+            "FROM table_state CROSS JOIN sequence_state"
+        ),
+        {"sequence_name": sequence_name},
+    )
+
+
 def _columns_for(table: str) -> list:
     if table == INFOPACK_TABLE:
         return ["cedant_code", "class_code", "title", "value",
@@ -1261,6 +1300,7 @@ def add_mapping_version(
             }
             for field_name, header_name in normalized_mapping.items()
         ]
+        _synchronize_mapping_table_identity(db, mapping_table)
         db.execute(
             text(
                 f"INSERT INTO {mapping_table} "
@@ -2934,6 +2974,7 @@ def _select_legacy_mapping_version(
             "created_by": context["uploaded_by"],
         })
     if inserts:
+        _synchronize_mapping_table_identity(db, mapping_table)
         db.execute(
             text(
                 f"INSERT INTO {mapping_table} "
@@ -3099,6 +3140,7 @@ def _select_mapping_version(
             "created_by": context["uploaded_by"],
         })
     if inserts:
+        _synchronize_mapping_table_identity(db, "rekonsiliasi.master_mapping_column")
         db.execute(
             text(
                 "INSERT INTO rekonsiliasi.master_mapping_column "
@@ -4047,13 +4089,12 @@ def _auto_match_headers_for_sheet(
 
 @router.post("/inspect", summary="Scan sheet dan seluruh header kolom dari file Excel sebelum disimpan")
 async def inspect_master_excel(
-    tipe_data:      Optional[str] = Form("OS Cedant"),
-    cedant:         Optional[str] = Form(None),
-    cedant_code:    Optional[str] = Form(None),
-    excel_password: Optional[str] = Form(None),
-    file:           UploadFile    = File(...),
-    db:             Session       = Depends(get_db),
-    session_id:     str           = Depends(get_session_id),
+    tipe_data:   Optional[str] = Form("OS Cedant"),
+    cedant:      Optional[str] = Form(None),
+    cedant_code: Optional[str] = Form(None),
+    file:        UploadFile    = File(...),
+    db:          Session       = Depends(get_db),
+    session_id:  str           = Depends(get_session_id),
 ):
     if not file.filename.lower().endswith((".xlsx", ".xls", ".xlsm", ".xlsb")):
         raise HTTPException(status_code=400, detail="File harus berformat .xlsx, .xls, .xlsm, atau .xlsb")
@@ -5613,6 +5654,7 @@ def get_master_data(
             )
     filter_columns = (
         {
+            "cedant_code": cedant_code,
             "class_code": class_code,
             "title": title,
             "value": value,

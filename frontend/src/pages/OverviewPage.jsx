@@ -43,7 +43,7 @@ const QUICK_ACTIONS = [
     key: "oscln",
     icon: ArrowsRightLeftIcon,
     label: "OSCLN Reconciliation",
-    desc: "Rekonsiliasi dua arah Master vs snapshot CSV OSCLN",
+    desc: "Customize Matching OSCLN (fsi_db) vs tabel hasil cedant & selisih Outstanding",
     tag: "Matching",
   },
 ];
@@ -57,17 +57,17 @@ const WORKFLOW_SUMMARY = [
   {
     n: "02",
     title: "Upload & Prepare",
-    desc: "Unggah workbook Excel untuk memindai seluruh header asli dan memvalidasi kolom target.",
+    desc: "Unggah workbook Excel (termasuk file ber-password) untuk memindai header asli & validasi kolom target.",
   },
   {
     n: "03",
-    title: "Confirm ke Master Data",
-    desc: "Simpan hasil ekstraksi terstandarisasi dan seluruh kolom mentah ke PostgreSQL.",
+    title: "Confirm ke Master & Hasil",
+    desc: "Simpan data terstandarisasi ke Master dan tabel per-cedant di schema hasil_rekonsiliasi.",
   },
   {
     n: "04",
-    title: "Rekonsiliasi OSCLN",
-    desc: "Bandingkan Master Data terhadap snapshot CSV internal OSCLN secara dua arah.",
+    title: "Customize Matching OSCLN",
+    desc: "Cocokkan fsi_db.clickhouse.oscln vs tabel cedant dengan field bebas, 5 POV, dan hitung selisih Outstanding.",
   },
 ];
 

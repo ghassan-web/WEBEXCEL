@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useColumnMappings } from "../hooks/useColumnMappings";
 import { addColumnMappingVersion } from "../services/api";
+import { PageHeader, Card, Button, Badge } from "../components/ui";
 import {
-  AdjustmentsHorizontalIcon,
   MagnifyingGlassIcon,
   ArrowPathIcon,
   InformationCircleIcon,
@@ -167,35 +167,33 @@ export default function MappingRulesPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-gray-50 overflow-auto">
-      <div className="page-header">
-        <div className="h-8 w-8 rounded-xl bg-teal-600 flex items-center justify-center flex-shrink-0">
-          <AdjustmentsHorizontalIcon className="h-4 w-4 text-white" />
-        </div>
-        <div>
-          <h1 className="text-base font-bold text-gray-800">Mapping Rules</h1>
-          <p className="text-xs text-gray-400">
-            Lihat riwayat versi dan tambahkan mapping kolom
-          </p>
-        </div>
-        <button
-          onClick={reload}
-          disabled={loading}
-          className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 bg-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
-        >
-          <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          Reload Mapping
-        </button>
-      </div>
+    <div className="mx-auto w-full max-w-[1600px] px-4 sm:px-6 py-6 space-y-5 font-sans text-[var(--color-ink)] saas-page-enter">
+      <PageHeader
+        title={`Mapping Rules — ${datasetType}`}
+        description="Lihat riwayat versi dan tambahkan aturan pemetaan kolom Excel per cedant & sheet. Tekan (+) untuk menyimpan mapping baru sebagai versi berikutnya."
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={ArrowPathIcon}
+            loading={loading}
+            onClick={reload}
+          >
+            Reload Mapping
+          </Button>
+        }
+      />
 
-      <div className="px-6 py-6 flex flex-col gap-5 max-w-7xl w-full">
-        <div className="flex gap-0 bg-white border border-gray-200 rounded-xl p-1 w-fit shadow-sm">
+      {/* Dataset Tabs & Info Summary */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex bg-[var(--color-surface)] p-1 rounded-[var(--radius-control)] border border-[var(--color-line)] shadow-2xs">
           {[
             ["os", "OS Claim Cedant"],
             ["infopack", "InfoPack"],
           ].map(([key, label]) => (
             <button
               key={key}
+              type="button"
               onClick={() => {
                 setActiveTab(key);
                 setSearch("");
@@ -203,97 +201,85 @@ export default function MappingRulesPage() {
                 setSaveError("");
                 setSaveMessage("");
               }}
-              className={[
-                "px-5 py-1.5 rounded-lg text-sm font-medium transition-all",
+              className={`px-4 py-1.5 rounded-[calc(var(--radius-control)-2px)] text-xs font-bold transition-all cursor-pointer ${
                 activeTab === key
-                  ? "bg-white shadow text-teal-700 font-semibold border border-gray-200"
-                  : "text-gray-500 hover:text-gray-700",
-              ].join(" ")}
+                  ? "bg-[var(--color-brand)] text-white shadow-2xs"
+                  : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+              }`}
             >
               {label}
             </button>
           ))}
         </div>
 
-        <div>
-          <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-0.5">
-            REFERENCE INTELLIGENCE
-          </p>
-          <h2 className="text-2xl font-extrabold text-gray-800">
-            Mapping Rules &mdash; {datasetType}
-          </h2>
-          <p className="text-xs text-gray-400 mt-1 max-w-2xl">
-            Setiap baris adalah field dan setiap kolom adalah versi mapping. Tekan{" "}
-            <span className="font-bold text-teal-700">+</span> untuk menambahkan atau
-            memperbarui mapping pada versi baru.
-          </p>
+        <div className="flex items-center gap-2 text-xs text-[var(--color-ink-muted)]">
+          <Badge tone="brand">
+            {loading ? "Memuat…" : `${versionGroups.length} cedant/sheet`}
+          </Badge>
+          <Badge tone="neutral">
+            {loading ? "—" : `${totalVersions} versi`}
+          </Badge>
         </div>
+      </div>
 
-        {error && (
-          <div
-            role="alert"
-            className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm"
-          >
-            Mapping database gagal dimuat: {error}
-          </div>
-        )}
-        {saveError && (
-          <div
-            role="alert"
-            className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm"
-          >
-            {saveError}
-          </div>
-        )}
-        {saveMessage && (
-          <div
-            role="status"
-            className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl text-sm"
-          >
-            {saveMessage}
-          </div>
-        )}
-
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4 flex flex-wrap items-center gap-3">
-          <InformationCircleIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
-          <span className="text-xs text-gray-500">
-            Mapping disimpan sebagai versi baru dan versi sebelumnya tetap tersedia.
-          </span>
-          <span className="ml-auto text-xs text-gray-500">
-            {loading ? "Memuat…" : `${versionGroups.length} cedant/sheet · ${totalVersions} versi`}
-          </span>
+      {error && (
+        <div
+          role="alert"
+          className="bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 text-[var(--color-danger)] px-4 py-3 rounded-[var(--radius-control)] text-xs font-medium"
+        >
+          Mapping database gagal dimuat: {error}
         </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-2.5 flex items-center gap-3">
-          <MagnifyingGlassIcon className="h-4 w-4 text-gray-400 flex-shrink-0" />
-          <input
-            type="text"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Cari cedant, sheet, field, atau header..."
-            className="flex-1 text-sm bg-transparent focus:outline-none text-gray-700 placeholder-gray-400"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              className="text-xs text-gray-400 hover:text-gray-600 px-1"
-              aria-label="Hapus pencarian"
-            >
-              &#x2715;
-            </button>
-          )}
-          <span className="text-xs text-gray-400 flex-shrink-0">
-            {filteredGroups.length} / {versionGroups.length}
-          </span>
+      )}
+      {saveError && (
+        <div
+          role="alert"
+          className="bg-[var(--color-danger-soft)] border border-[var(--color-danger)]/25 text-[var(--color-danger)] px-4 py-3 rounded-[var(--radius-control)] text-xs font-medium"
+        >
+          {saveError}
         </div>
+      )}
+      {saveMessage && (
+        <div
+          role="status"
+          className="bg-[var(--color-valid-soft)] border border-[var(--color-valid)]/25 text-[var(--color-valid)] px-4 py-3 rounded-[var(--radius-control)] text-xs font-medium"
+        >
+          {saveMessage}
+        </div>
+      )}
 
-        {filteredGroups.length === 0 && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm text-center py-12 text-gray-400 text-sm">
-            {loading ? "Memuat mapping database…" : "Tidak ada mapping yang cocok dengan pencarian."}
+      {/* Info Banner + Search Bar */}
+      <Card padding="none" className="overflow-hidden">
+        <div className="px-4 py-3 border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)]/40 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs text-[var(--color-ink-muted)]">
+            <InformationCircleIcon className="h-4 w-4 text-[var(--color-brand)] shrink-0" />
+            <span>
+              Mapping disimpan sebagai versi baru (`mapping_id` unik) dan versi sebelumnya tetap terjaga.
+            </span>
           </div>
-        )}
 
+          <div className="relative w-full sm:w-80">
+            <MagnifyingGlassIcon className="h-4 w-4 text-[var(--color-ink-muted)] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Cari cedant, sheet, field, atau header..."
+              className="w-full h-9 pl-9 pr-14 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-surface)] text-xs text-[var(--color-ink)] placeholder:text-[var(--color-ink-muted)] focus:outline-none focus:border-[var(--color-brand)]"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-mono text-[var(--color-ink-muted)]">
+              {filteredGroups.length}/{versionGroups.length}
+            </span>
+          </div>
+        </div>
+      </Card>
+
+      {filteredGroups.length === 0 && (
+        <Card className="text-center py-12 text-[var(--color-ink-muted)] text-xs">
+          {loading ? "Memuat mapping database…" : "Tidak ada mapping yang cocok dengan pencarian."}
+        </Card>
+      )}
+
+      <div className="space-y-4">
         {filteredGroups.map((group) => {
           const fieldNames = [
             ...new Set([
@@ -306,67 +292,66 @@ export default function MappingRulesPage() {
           const latestVersion = group.versions[group.versions.length - 1];
 
           return (
-            <section
-              key={group.key}
-              className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden"
-            >
-              <div className="px-4 py-3 flex flex-wrap items-center gap-2 border-b border-gray-100">
-                <span className="font-mono font-bold text-teal-700 bg-teal-50 px-2 py-1 rounded text-xs">
+            <Card key={group.key} padding="none" className="overflow-hidden">
+              <div className="px-4 py-3 flex flex-wrap items-center gap-2.5 border-b border-[var(--color-line)] bg-[var(--color-surface)]">
+                <Badge tone="brand" className="font-mono">
                   {group.cedantCode || "—"}
+                </Badge>
+                <span className="text-sm font-bold text-[var(--color-ink)]">{group.cedant}</span>
+                <span className="text-xs text-[var(--color-ink-muted)]">
+                  · Sheet: <span className="font-medium text-[var(--color-ink-body)]">{group.sheetMet}</span>
                 </span>
-                <span className="text-sm font-semibold text-gray-800">{group.cedant}</span>
-                <span className="text-xs text-gray-400">· Sheet: {group.sheetMet}</span>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs">
+              <div className="overflow-x-auto table-scroll">
+                <table className="min-w-full text-xs border-collapse">
                   <thead>
-                    <tr className="border-b border-gray-100 bg-gray-50">
-                      <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">
+                    <tr className="border-b border-[var(--color-line)] bg-[var(--color-surface-sunken)] text-[11px] uppercase font-bold tracking-wider">
+                      <th className="px-4 py-2.5 text-left text-[var(--color-ink-muted)] whitespace-nowrap">
                         Cedant
                       </th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide">
+                      <th className="px-4 py-2.5 text-left text-[var(--color-ink-muted)] whitespace-nowrap">
                         Field
                       </th>
                       {versionNumbers.map((version) => (
                         <th
                           key={version}
-                          className="px-3 py-2.5 text-left font-semibold text-teal-700 uppercase tracking-wide min-w-[160px]"
+                          className="px-4 py-2.5 text-left text-[var(--color-brand)] whitespace-nowrap min-w-[160px]"
                         >
                           Mapping Ver {version}
                         </th>
                       ))}
-                      <th className="px-3 py-2.5 text-left font-semibold text-teal-700 uppercase tracking-wide min-w-[190px]">
+                      <th className="px-4 py-2.5 text-left text-[var(--color-brand)] whitespace-nowrap min-w-[190px]">
                         Mapping Ver {nextVersion}
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
+                  <tbody className="divide-y divide-[var(--color-line)]/60">
                     {fieldNames.map((fieldName) => {
                       const editKey = `${group.key}:${fieldName}`;
                       const isEditing = editing?.key === editKey;
                       return (
                         <tr
                           key={fieldName}
-                          className="hover:bg-teal-50/30 transition-colors"
+                          className="hover:bg-[var(--color-surface-sunken)]/50 transition-colors"
                         >
-                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+                          <td className="px-4 py-2.5 font-mono text-[var(--color-ink-muted)] whitespace-nowrap">
                             {group.cedantCode || group.cedant}
                           </td>
-                          <td className="px-3 py-2 font-mono font-semibold text-gray-700 whitespace-nowrap">
+                          <td className="px-4 py-2.5 font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
                             {fieldLabel(fieldName)}
                           </td>
                           {group.versions.map((version) => (
                             <td
                               key={version.versionNumber}
-                              className="px-3 py-2 text-gray-700 whitespace-nowrap"
+                              className="px-4 py-2.5 text-[var(--color-ink-body)] whitespace-nowrap"
                             >
                               {version.mapping[fieldName] || (
-                                <span className="text-gray-300">—</span>
+                                <span className="text-[var(--color-ink-faint)]">—</span>
                               )}
                             </td>
                           ))}
-                          <td className="px-3 py-2">
+                          <td className="px-4 py-2.5">
                             {isEditing ? (
                               <form
                                 className="flex items-center gap-1.5"
@@ -386,12 +371,12 @@ export default function MappingRulesPage() {
                                     }))
                                   }
                                   placeholder="Nama kolom Excel"
-                                  className="w-40 rounded-lg border border-teal-300 px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                                  className="w-40 h-8 rounded-[var(--radius-control)] border border-[var(--color-brand)] px-2.5 text-xs text-[var(--color-ink)] bg-[var(--color-surface)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/20"
                                 />
                                 <button
                                   type="submit"
                                   disabled={!editing.value.trim() || savingKey === editKey}
-                                  className="rounded-lg bg-teal-600 p-1.5 text-white hover:bg-teal-700 disabled:opacity-40"
+                                  className="h-8 w-8 inline-flex items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-brand)] text-white hover:opacity-90 disabled:opacity-40 cursor-pointer"
                                   aria-label="Simpan mapping"
                                   title="Simpan mapping"
                                 >
@@ -401,7 +386,7 @@ export default function MappingRulesPage() {
                                   type="button"
                                   onClick={() => setEditing(null)}
                                   disabled={savingKey === editKey}
-                                  className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                                  className="h-8 w-8 inline-flex items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-line)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-sunken)] disabled:opacity-40 cursor-pointer"
                                   aria-label="Batal"
                                   title="Batal"
                                 >
@@ -413,7 +398,7 @@ export default function MappingRulesPage() {
                                 type="button"
                                 onClick={() => startEditing(group, fieldName)}
                                 disabled={Boolean(savingKey)}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 disabled:opacity-40"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-brand-line)] bg-[var(--color-brand-soft)] text-[var(--color-brand)] hover:opacity-85 disabled:opacity-40 cursor-pointer transition-opacity"
                                 aria-label={`Tambah mapping ${fieldLabel(fieldName)}`}
                                 title="Tambah mapping ke versi baru"
                               >
@@ -428,7 +413,7 @@ export default function MappingRulesPage() {
                       <tr>
                         <td
                           colSpan={versionNumbers.length + 3}
-                          className="px-4 py-8 text-center text-gray-400"
+                          className="px-4 py-8 text-center text-[var(--color-ink-muted)]"
                         >
                           Belum ada field mapping untuk profil ini.
                         </td>
@@ -438,19 +423,20 @@ export default function MappingRulesPage() {
                 </table>
               </div>
 
-              <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">
-                Versi aktif:{" "}
-                <strong className="text-gray-700">
-                  {latestVersion ? `Mapping Ver ${latestVersion.versionNumber}` : "Belum ada"}
-                </strong>
-                {" · "}
-                <span className="text-emerald-700 font-semibold">
+              <div className="px-4 py-2.5 bg-[var(--color-surface-sunken)]/50 border-t border-[var(--color-line)] text-xs text-[var(--color-ink-muted)] flex items-center justify-between gap-2">
+                <span>
+                  Versi aktif:{" "}
+                  <strong className="text-[var(--color-ink)]">
+                    {latestVersion ? `Mapping Ver ${latestVersion.versionNumber}` : "Belum ada"}
+                  </strong>
+                </span>
+                <span className="text-[var(--color-valid)] font-semibold">
                   {latestVersion
                     ? `${Object.keys(latestVersion.mapping).length} field terpetakan`
                     : "Tambah mapping pertama"}
                 </span>
               </div>
-            </section>
+            </Card>
           );
         })}
       </div>

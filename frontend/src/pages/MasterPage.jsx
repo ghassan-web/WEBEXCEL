@@ -28,10 +28,13 @@ const CORE_FILTERS = {
   ],
   infopack: [
     { key: "cedant_code", label: "Cedant Code", placeholder: "Kode cedant..." },
-    { key: "sheet_name", label: "Sheet", placeholder: "Nama sheet..." },
+    { key: "cedant_name", label: "Cedant Name", placeholder: "Nama cedant..." },
+    { key: "dol", label: "Date of Loss", placeholder: "YYYY-MM-DD..." },
+    { key: "cob", label: "COB", placeholder: "Cari COB..." },
+    { key: "gross", label: "Gross", placeholder: "Cari nilai gross..." },
+    { key: "tsi", label: "TSI", placeholder: "Cari nilai TSI..." },
     { key: "class_code", label: "Class Code", placeholder: "Cari class code..." },
-    { key: "title", label: "Title / Uraian", placeholder: "Cari title..." },
-    { key: "value", label: "Value", placeholder: "Cari value..." },
+    { key: "title", label: "Insured / Title", placeholder: "Cari insured..." },
     { key: "period", label: "Periode", placeholder: "Bulan/Tahun..." },
   ],
 };
@@ -165,6 +168,10 @@ export default function MasterPage() {
         cedantName: displayValue(r.cedant_name || d.cedant_name),
         sheet,
         classCode: displayValue(d.class_code),
+        dol: displayValue(d.dol),
+        cob: displayValue(d.cob),
+        gross: displayValue(d.gross),
+        tsi: displayValue(d.tsi),
         title: displayValue(d.title || r.primary_key_value),
         value: displayValue(d.value),
         period: [r.bulan, r.tahun].filter(Boolean).join("/"),
@@ -581,23 +588,15 @@ export default function MasterPage() {
                       <th className="px-4 py-3 text-left whitespace-nowrap">Currency</th>
                       <th className="px-4 py-3 text-right whitespace-nowrap">Outstanding</th>
                     </>
-                  ) : !selectedCedant ? (
-                    <div className="flex min-h-64 flex-col items-center justify-center gap-2 px-6 text-center">
-                      <FunnelIcon className="h-8 w-8 text-[var(--color-brand)]" />
-                      <p className="text-sm font-semibold text-[var(--color-ink)]">
-                        Pilih cedant untuk melihat scanned columns
-                      </p>
-                      <p className="max-w-md text-xs text-[var(--color-ink-muted)]">
-                        Gunakan filter Cedant di atas. Kolom dan data akan ditampilkan khusus untuk cedant yang dipilih agar tidak bercampur.
-                      </p>
-                    </div>
                   ) : (
                     <>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Code</th>
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Sheet</th>
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Class Code</th>
-                      <th className="px-4 py-3 text-left whitespace-nowrap">Title / Uraian</th>
-                      <th className="px-4 py-3 text-right whitespace-nowrap">Value</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Cedant Name</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">DOL</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">COB</th>
+                      <th className="px-4 py-3 text-left whitespace-nowrap">Insured / Title</th>
+                      <th className="px-4 py-3 text-right whitespace-nowrap">Gross</th>
+                      <th className="px-4 py-3 text-right whitespace-nowrap">TSI</th>
                       <th className="px-4 py-3 text-left whitespace-nowrap">Periode</th>
                     </>
                   )}
@@ -607,7 +606,7 @@ export default function MasterPage() {
                 {loading && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={activeTab === "infopack" ? 8 : 6}
                       className="text-center py-12 text-[var(--color-ink-muted)] animate-pulse"
                     >
                       Memuat data Master...
@@ -617,7 +616,7 @@ export default function MasterPage() {
                 {!loading && rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={activeTab === "infopack" ? 8 : 6}
                       className="text-center py-12 text-[var(--color-ink-muted)]"
                     >
                       Belum ada data yang sesuai. Silakan unggah file Excel melalui halaman Upload Data.
@@ -628,28 +627,48 @@ export default function MasterPage() {
                   rows.map((r) => {
                     const d = mapCoreRow(r);
                     if (activeTab === "infopack") {
+                      const fmtNum = (rawStr) => {
+                        const cleaned = String(rawStr || "").replace(/[^0-9.\-]/g, "");
+                        if (!cleaned) return "—";
+                        const num = Number(cleaned);
+                        if (Number.isNaN(num)) return rawStr;
+                        return num.toLocaleString("id-ID", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        });
+                      };
                       return (
                         <tr
                           key={r.id}
                           className="hover:bg-[var(--color-surface-sunken)]/60 transition-colors"
                         >
                           <td className="px-4 py-2.5 font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
-                            {d.cedant}
+                            {d.cedantCode}
                           </td>
-                          <td className="px-4 py-2.5 text-[var(--color-brand)] font-medium whitespace-nowrap">
-                            {d.sheet}
+                          <td className="px-4 py-2.5 text-[var(--color-ink-body)] max-w-[220px]">
+                            <span className="truncate block" title={d.cedantName}>
+                              {d.cedantName || "—"}
+                            </span>
                           </td>
                           <td className="px-4 py-2.5 font-mono text-[var(--color-ink-body)] whitespace-nowrap">
-                            {d.classCode}
+                            {d.dol || "—"}
                           </td>
-                          <td className="px-4 py-2.5 text-[var(--color-ink)] font-medium">
-                            {d.title}
+                          <td className="px-4 py-2.5 text-[var(--color-brand)] font-medium whitespace-nowrap">
+                            {d.cob || d.classCode || "—"}
                           </td>
-                          <td className="px-4 py-2.5 text-right font-mono text-[var(--color-ink)] whitespace-nowrap">
-                            {d.value}
+                          <td className="px-4 py-2.5 text-[var(--color-ink)] font-medium max-w-[240px]">
+                            <span className="truncate block" title={d.title}>
+                              {d.title || "—"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono font-semibold text-[var(--color-ink)] whitespace-nowrap">
+                            {fmtNum(d.gross)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-[var(--color-ink-body)] whitespace-nowrap">
+                            {fmtNum(d.tsi)}
                           </td>
                           <td className="px-4 py-2.5 font-mono text-[var(--color-ink-muted)] whitespace-nowrap">
-                            {d.period}
+                            {d.period || "—"}
                           </td>
                         </tr>
                       );

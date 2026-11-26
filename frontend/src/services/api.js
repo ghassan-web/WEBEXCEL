@@ -55,11 +55,20 @@ function sessionHeaders(extra = {}) {
 async function handleResponse(res) {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let code = null;
     try {
       const data = await res.json();
-      msg = data.detail || data.message || msg;
+      if (data?.detail && typeof data.detail === "object") {
+        msg = data.detail.message || data.detail.detail || msg;
+        code = data.detail.code || null;
+      } else {
+        msg = data.detail || data.message || msg;
+        code = data.code || null;
+      }
     } catch (_) {}
-    throw new Error(msg);
+    const err = new Error(msg);
+    if (code) err.code = code;
+    throw err;
   }
   return res.json();
 }
@@ -83,11 +92,20 @@ function xhrUpload(url, formData, onProgress) {
         try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
       } else {
         let msg = `HTTP ${xhr.status}`;
+        let code = null;
         try {
           const data = JSON.parse(xhr.responseText);
-          msg = data.detail || data.message || msg;
+          if (data?.detail && typeof data.detail === "object") {
+            msg = data.detail.message || data.detail.detail || msg;
+            code = data.detail.code || null;
+          } else {
+            msg = data.detail || data.message || msg;
+            code = data.code || null;
+          }
         } catch (_) {}
-        reject(new Error(msg));
+        const err = new Error(msg);
+        if (code) err.code = code;
+        reject(err);
       }
     };
 
@@ -359,5 +377,45 @@ export async function deleteOsclnSnapshot(snapshotId) {
     `${BASE_URL}/api/oscln/snapshots/${snapshotId}`,
     { method: "DELETE", headers: sessionHeaders() },
   );
+  return handleResponse(res);
+}
+
+// ─── OSCLN Customize Matching (fsi_db.clickhouse.oscln <-> hasil_rekonsiliasi) ─
+
+/** GET /api/oscln/sources */
+export async function getOsclnSources() {
+  const res = await fetch(`${BASE_URL}/api/oscln/sources`, {
+    headers: sessionHeaders(),
+  });
+  return handleResponse(res);
+}
+
+/** POST /api/oscln/matching/preview — "Bandingkan Data" */
+export async function previewCustomMatching(payload) {
+  const res = await fetch(`${BASE_URL}/api/oscln/matching/preview`, {
+    method: "POST",
+    headers: sessionHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res);
+}
+
+/** POST /api/oscln/matching/save — "Update Data Matching" */
+export async function saveCustomMatching(payload) {
+  const res = await fetch(`${BASE_URL}/api/oscln/matching/save`, {
+    method: "POST",
+    headers: sessionHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res);
+}
+
+/** GET /api/oscln/matching/history */
+export async function listCustomMatchingHistory(pov = "", limit = 50) {
+  const params = new URLSearchParams({ limit });
+  if (pov) params.append("pov", pov);
+  const res = await fetch(`${BASE_URL}/api/oscln/matching/history?${params}`, {
+    headers: sessionHeaders(),
+  });
   return handleResponse(res);
 }

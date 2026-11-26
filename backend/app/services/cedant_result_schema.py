@@ -44,9 +44,14 @@ REQUIRED_FOREIGN_KEYS = {
 }
 
 
-def result_table_name(short_name: str) -> str:
+def result_table_name(short_name: str, dataset_type: str = "OS CEDANT") -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", (short_name or "").lower()).strip("_")
-    name = f"os_claim_cedant_{slug}"
+    prefix = (
+        "os_claim_infopack"
+        if dataset_type.strip().upper() in {"INFOPACK", "INFO_PACK", "INFO-PACK"}
+        else "os_claim_cedant"
+    )
+    name = f"{prefix}_{slug}"
     if not slug or len(name) > 63:
         raise HTTPException(
             status_code=422,
@@ -113,9 +118,22 @@ def resolve_result_columns(
     catalog: list[dict],
     dataset_type: str = "OS CEDANT",
 ) -> dict[str, str]:
+    """Keep each cedant's first mapped header as the result column for that field."""
+    normalized_dataset_type = str(dataset_type).strip().upper()
+    if normalized_dataset_type in {"INFOPACK", "INFO_PACK", "INFO-PACK"}:
+        mapping_table = "master_mapping_column_infopack"
+        normalized_dataset_type = "INFOPACK"
+    else:
+        mapping_table = "master_mapping_column"
+        normalized_dataset_type = "OS CEDANT"
+
     source_fields: dict[str, list[str]] = {}
     for field_name, source_header in mapping.items():
-        if not source_header or field_name == "class_code":
+        if (
+            not source_header
+            or field_name == "class_code"
+            or (normalized_dataset_type == "INFOPACK" and field_name == "cob")
+        ):
             continue
         source_key = str(source_header).strip().casefold()
         source_fields.setdefault(source_key, []).append(field_name)
@@ -144,15 +162,10 @@ def resolve_result_columns(
     ).scalar_one()
     existing_columns = _table_columns(db, table_name) if table_exists else {}
 
-    normalized_dataset = str(dataset_type).strip().upper()
-    if normalized_dataset == "INFOPACK":
-        history_table = "rekonsiliasi.master_mapping_column_infopack"
-    else:
-        history_table = "rekonsiliasi.master_mapping_column"
     history = db.execute(
         text(
             "SELECT f.field_name, m.header_name "
-            f"FROM {history_table} m "
+            f"FROM rekonsiliasi.{mapping_table} m "
             "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
             "WHERE m.cedant_code = :cedant_code "
             "AND UPPER(BTRIM(f.dataset_type)) = :dataset_type "
@@ -161,12 +174,12 @@ def resolve_result_columns(
             "ORDER BY m.mapping_version ASC, m.column_index ASC NULLS LAST, "
             "m.mapping_id ASC"
         ),
-        {"cedant_code": cedant_code, "dataset_type": normalized_dataset},
+        {"cedant_code": cedant_code, "dataset_type": normalized_dataset_type},
     ).mappings()
     first_mapping_headers: dict[str, str] = {}
     for row in history:
         canonical_field = row["field_name"]
-        if normalized_dataset != "INFOPACK":
+        if normalized_dataset_type != "INFOPACK":
             canonical_field = {
                 "doc_no": "loss_ref",
                 "title": "insured",
@@ -181,10 +194,14 @@ def resolve_result_columns(
     resolved: dict[str, str] = {}
     destination_fields: dict[str, str] = {}
     for field_name, source_header in mapping.items():
-        if not source_header or field_name == "class_code":
+        if (
+            not source_header
+            or field_name == "class_code"
+            or (normalized_dataset_type == "INFOPACK" and field_name == "cob")
+        ):
             continue
         canonical_field = field_name
-        if normalized_dataset != "INFOPACK":
+        if normalized_dataset_type != "INFOPACK":
             canonical_field = {
                 "doc_no": "loss_ref",
                 "title": "insured",
@@ -208,7 +225,11 @@ def resolve_result_columns(
                 status_code=422,
                 detail=f"Header hasil '{result_header}' tidak dapat digunakan.",
             )
-        if table_exists and result_header not in existing_columns:
+        if (
+            table_exists
+            and result_header not in existing_columns
+            and normalized_dataset_type != "INFOPACK"
+        ):
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -333,6 +354,7 @@ def ensure_result_table(
     table_name: str,
     mapping: dict[str, str],
     catalog: list[dict],
+    dataset_type: str = "OS CEDANT",
 ) -> None:
     schema_exists = db.execute(
         text(
@@ -343,7 +365,7 @@ def ensure_result_table(
     if not schema_exists:
         raise HTTPException(
             status_code=422,
-            detail="Schema hasil_rekonsiliasi tidak tersedia untuk tabel hasil OS Cedant.",
+            detail="Schema hasil_rekonsiliasi tidak tersedia untuk tabel hasil cedant.",
         )
 
     fields = {
@@ -351,6 +373,15 @@ def ensure_result_table(
         for field in catalog
         if field.get("default_source") == "column"
     }
+    if dataset_type.strip().upper() in {"INFOPACK", "INFO_PACK", "INFO-PACK"}:
+        fields.setdefault(
+            "cob",
+            {
+                "field_name": "cob",
+                "default_source": "column",
+                "data_type": "text",
+            },
+        )
     source_columns = {}
     for raw_field, header in mapping.items():
         if not header or raw_field == "class_code":

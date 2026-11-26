@@ -43,8 +43,8 @@ const FIELD_LABELS = {
   gross: "Gross",
   currency: "Currency",
   insured: "Insured",
-  class_code: "Class Code",
-  cob: "COB",
+  class_code: "Class Code (COB)",
+  cob: "Class Code (COB)",
   tsi: "TSI",
   title: "Title",
   value: "Value",
@@ -66,7 +66,9 @@ function ReviewUploadModal({
   onClose,
 }) {
   const fields = (mappingData?.field_catalog || []).filter(
-    (field) => field.default_source === "column" || field.candidate_headers?.length
+    (field) =>
+      !(mappingData?.dataset_type === "INFOPACK" && field.field_name === "cob")
+      && (field.default_source === "column" || field.candidate_headers?.length)
   );
   const missingRequired = fields.some(
     (field) => field.required && !mapping?.[field.field_name]
@@ -591,7 +593,14 @@ export default function LibraryPage({ initialTab }) {
     try {
       const result = await getMasterUploadTableMapping(sheet.table_id);
       setReviewData(result);
-      setReviewMapping(result.suggested_mapping || {});
+      const suggestedMapping = { ...(result.suggested_mapping || {}) };
+      if (result.dataset_type === "INFOPACK" && suggestedMapping.cob) {
+        if (!suggestedMapping.class_code) {
+          suggestedMapping.class_code = suggestedMapping.cob;
+        }
+        delete suggestedMapping.cob;
+      }
+      setReviewMapping(suggestedMapping);
     } catch (e) {
       setReviewError(e.message);
     } finally {

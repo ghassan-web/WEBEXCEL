@@ -106,39 +106,105 @@ export const TARGET_SEARCH_COLUMNS = [
 
 const INFOPACK_TARGET_SEARCH_COLUMNS = [
   {
-    dbField: "dol",
-    label: "DOL / Date of Loss",
+    dbField: "loss_ref",
+    label: "Loss Ref / Claim No",
     required: true,
-    sqlType: "DATE",
-    patterns: [/^dol$/i, /^date\s*of\s*loss$/i, /^loss\s*date$/i, /\bdol\b/i],
+    sqlType: "TEXT",
+    patterns: [
+      /(?:loss|claim)\s*(?:ref|reference|no|number|id)/i,
+      /document\s*(?:no|number|ref)/i,
+      /invoice\s*(?:no|number|ref)/i,
+      /\b(?:no|nomor)\s*(?:klaim|dokumen)\b/i,
+    ],
   },
   {
-    dbField: "cob",
-    label: "COB",
-    required: true,
-    sqlType: "VARCHAR(100)",
-    patterns: [/^cob$/i, /class\s*of\s*business/i, /business\s*class/i],
-  },
-  {
-    dbField: "gross",
-    label: "Gross",
-    required: true,
-    sqlType: "NUMERIC",
-    patterns: [/gross/i],
-  },
-  {
-    dbField: "tsi",
-    label: "TSI",
-    required: true,
-    sqlType: "NUMERIC",
-    patterns: [/^tsi$/i, /total\s*sum\s*insured/i, /sum\s*insured/i],
+    dbField: "class_code",
+    label: "Class Code (COB)",
+    required: false,
+    sqlType: "VARCHAR(50)",
+    patterns: [
+      /^class[\s_-]*code$/i,
+      /^classcode$/i,
+      /^cob$/i,
+      /class\s*of\s*business/i,
+    ],
   },
   {
     dbField: "insured",
     label: "Insured",
     required: false,
     sqlType: "TEXT",
-    patterns: [/insured/i, /policyholder/i],
+    patterns: [/insured/i, /policyholder/i, /assured/i, /tertanggung/i, /policy\s*name/i],
+  },
+  {
+    dbField: "dol",
+    label: "DOL / Date of Loss",
+    required: true,
+    sqlType: "DATE",
+    patterns: [
+      /^dol$/i,
+      /^date\s*of\s*\/?\s*loss$/i,
+      /^loss\s*date$/i,
+      /loss.*date|date.*loss/i,
+      /\bdol\b/i,
+    ],
+  },
+  {
+    dbField: "gross",
+    label: "Gross (100% Claim)",
+    required: true,
+    sqlType: "NUMERIC",
+    patterns: [/gross/i, /incurred|bruto/i, /(?:claim|loss)\s*(?:amount|value)/i, /100\s*%\s*(?:claim|loss)/i],
+  },
+  {
+    dbField: "surplus_outstanding",
+    label: "Surplus Outstanding",
+    required: false,
+    requiredAnyGroup: "infopack_outstanding",
+    sqlType: "NUMERIC",
+    patterns: [/sur\s*plus/i],
+  },
+  {
+    dbField: "qs_outstanding",
+    label: "QS Outstanding",
+    required: false,
+    requiredAnyGroup: "infopack_outstanding",
+    sqlType: "NUMERIC",
+    patterns: [/\b(?:qs|qts)\b/i, /quota[\s_-]*share/i],
+  },
+  {
+    dbField: "currency",
+    label: "Currency",
+    required: false,
+    sqlType: "TEXT",
+    patterns: [/^currency$/i, /currency\s*code/i, /\bcurr(?:ency)?\b/i],
+  },
+  {
+    dbField: "policy_number",
+    label: "Policy Number",
+    required: false,
+    sqlType: "TEXT",
+    patterns: [/policy\s*(?:no|number|#)/i],
+  },
+  {
+    dbField: "policy_comm_date",
+    label: "Policy Commencement Date",
+    required: false,
+    sqlType: "DATE",
+    patterns: [
+      /policy\s*(?:commencement|comm|inception|start)\s*date/i,
+      /\b(?:inception|effective|commencement|cover\s*start)\s*date\b/i,
+    ],
+  },
+  {
+    dbField: "policy_expiry_date",
+    label: "Policy Expiry Date",
+    required: false,
+    sqlType: "DATE",
+    patterns: [
+      /policy\s*(?:expiry|expiration|end)\s*date/i,
+      /\b(?:expiry|expiration|cover\s*end)\s*date\b/i,
+    ],
   },
 ];
 
@@ -174,21 +240,36 @@ function matchExcelColumnsToTargets(excelColumns = [], activeProfile = null, tar
   return matchedMap;
 }
 
-function keepMappingsPresentInHeaders(mapping, headers) {
+function keepMappingsPresentInHeaders(mapping, headers, targets = null) {
   const headerLookup = new Map(
     headers.map((header) => [
       String(header).trim().replace(/\s+/g, " ").toLowerCase(),
       header,
     ])
   );
+  const allowedFields = targets ? new Set(targets.map((target) => target.dbField)) : null;
   return Object.fromEntries(
     Object.entries(mapping || {}).flatMap(([field, header]) => {
+      if (allowedFields && !allowedFields.has(field)) return [];
       const actualHeader = headerLookup.get(
         String(header || "").trim().replace(/\s+/g, " ").toLowerCase()
       );
       return actualHeader ? [[field, actualHeader]] : [];
     })
   );
+}
+
+function normalizeInfopackProfileMapping(mapping) {
+  const normalized = { ...(mapping || {}) };
+  if (!normalized.loss_ref && normalized.doc_no) {
+    normalized.loss_ref = normalized.doc_no;
+  }
+  if (!normalized.insured && normalized.title) {
+    normalized.insured = normalized.title;
+  }
+  delete normalized.doc_no;
+  delete normalized.title;
+  return normalized;
 }
 
 /** Auto-detect bulan & tahun dari nama file (contoh: "ACA - 08_INDO RE - Os per 31Agt2026...") */
@@ -268,10 +349,29 @@ export default function ComparePage({ onNavigate }) {
 
   const isInfopack = activeTab === "infopack";
   const tipeData = isInfopack ? "Infopack" : "OS Cedant";
+  const mappingRuleFields =
+    inspectData?.mapping_rule_fields_by_sheet?.[selectedSheet] || [];
   const targetSearchColumns = isInfopack
-    ? INFOPACK_TARGET_SEARCH_COLUMNS
+    ? inspectData?.target_schema?.length
+      ? inspectData.target_schema.map((field) => ({
+          ...field,
+          required:
+            field.dbField === "class_code"
+              ? mappingRuleFields.includes("class_code")
+              : field.required,
+          patterns:
+            INFOPACK_TARGET_SEARCH_COLUMNS.find(
+              (target) => target.dbField === field.dbField
+            )?.patterns || [],
+        }))
+      : INFOPACK_TARGET_SEARCH_COLUMNS.map((field) => ({
+          ...field,
+          required:
+            field.dbField === "class_code"
+              ? mappingRuleFields.includes("class_code")
+              : field.required,
+        }))
     : TARGET_SEARCH_COLUMNS;
-
   /* ── Unique Insurance Company List ── */
   const allProfilesForTab = useMemo(
     () => profiles.filter((p) => p.tipe_data === (isInfopack ? "Infopack" : "OS Cedant")),
@@ -316,6 +416,9 @@ export default function ComparePage({ onNavigate }) {
   }, [allProfilesForTab, selectedCedant]);
 
   const currentProfile = activeCedantProfiles[selectedProfileIdx] ?? activeCedantProfiles[0] ?? null;
+  const profileMapping = isInfopack
+    ? normalizeInfopackProfileMapping(currentProfile?.mapping)
+    : currentProfile?.mapping || {};
 
   const filteredCedants = useMemo(() => {
     if (!cedantQuery.trim()) return cedantOptions;
@@ -412,13 +515,17 @@ export default function ComparePage({ onNavigate }) {
 
       const cols = res.sheet_columns?.[defSheet] || [];
       const prof = allProfilesForTab.find((p) => p.cedant === activeCedantObj?.name) || null;
-      const initialTargetMap = matchExcelColumnsToTargets(cols, prof, targetSearchColumns);
+      const initialTargetMap = matchExcelColumnsToTargets(
+        cols,
+        isInfopack ? null : prof,
+        targetSearchColumns
+      );
       const backendMap = res.auto_mappings?.[defSheet] || {};
       setMapping(keepMappingsPresentInHeaders({
         ...initialTargetMap,
-        ...(prof?.mapping || {}),
+        ...(!isInfopack ? prof?.mapping || {} : {}),
         ...backendMap,
-      }, cols));
+      }, cols, targetSearchColumns));
       setPreparedUpload(null);
     } catch (err) {
       setErrorMessage(err.message || "Gagal memindai header file Excel. Pastikan backend berjalan di port 8000.");
@@ -437,13 +544,17 @@ export default function ComparePage({ onNavigate }) {
       (sheet) => sheet.sheet_name === newSheet
     );
     const preparedMap = preparedSheet?.suggested_mapping || {};
-    const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
+    const targetMap = matchExcelColumnsToTargets(
+      cols,
+      isInfopack ? null : currentProfile,
+      targetSearchColumns
+    );
     setMapping(keepMappingsPresentInHeaders({
       ...targetMap,
-      ...(currentProfile?.mapping || {}),
+      ...(!isInfopack ? profileMapping : {}),
       ...backendMap,
       ...preparedMap,
-    }, cols));
+    }, cols, targetSearchColumns));
     setErrorMessage(preparedSheet?.error_message || "");
   };
 
@@ -453,13 +564,17 @@ export default function ComparePage({ onNavigate }) {
     const preparedMap = preparedUpload?.sheets?.find(
       (sheet) => sheet.sheet_name === selectedSheet
     )?.suggested_mapping || {};
-    const targetMap = matchExcelColumnsToTargets(cols, currentProfile, targetSearchColumns);
+    const targetMap = matchExcelColumnsToTargets(
+      cols,
+      isInfopack ? null : currentProfile,
+      targetSearchColumns
+    );
     setMapping(keepMappingsPresentInHeaders({
       ...targetMap,
-      ...(currentProfile?.mapping || {}),
+      ...(!isInfopack ? profileMapping : {}),
       ...backendMap,
       ...preparedMap,
-    }, cols));
+    }, cols, targetSearchColumns));
   };
 
   /* Mengubah penugasan kolom Excel ke field target. */
@@ -490,6 +605,12 @@ export default function ComparePage({ onNavigate }) {
   const missingRequiredTargets = targetSearchColumns.filter(
     (target) => target.required && !mapping?.[target.dbField]
   );
+  const hasInfopackOutstandingMapping = Boolean(
+    mapping?.surplus_outstanding || mapping?.qs_outstanding
+  );
+  const missingRequiredCount =
+    missingRequiredTargets.length +
+    (isInfopack && !hasInfopackOutstandingMapping ? 1 : 0);
 
   /* ── Eksekusi Simpan ke Master Database (Step 2 -> Step 3) ── */
   const executeUpload = async ({ skipSelected = false } = {}) => {
@@ -557,7 +678,7 @@ export default function ComparePage({ onNavigate }) {
       if (
         !skipSelected &&
         !["ready", "skipped", "empty"].includes(selected.status) &&
-        missingRequiredTargets.length === 0
+        missingRequiredCount === 0
       ) {
         sheetsToConfirm.push(selected);
       }
@@ -1383,10 +1504,20 @@ export default function ComparePage({ onNavigate }) {
                     .map((target, idx) => {
                       const mappedColumn = mapping?.[target.dbField] || "";
                       const isMatched = Boolean(mappedColumn);
+                      const requiredGroupSatisfied = target.requiredAnyGroup
+                        ? targetSearchColumns.some(
+                            (candidate) =>
+                              candidate.requiredAnyGroup === target.requiredAnyGroup &&
+                              Boolean(mapping?.[candidate.dbField])
+                          )
+                        : false;
+                      const needsMapping =
+                        target.required ||
+                        (target.requiredAnyGroup && !requiredGroupSatisfied);
 
                       const rowClass = isMatched
                         ? "bg-[var(--color-valid-soft)]/55 hover:bg-[var(--color-valid-soft)] border-l-4 border-l-[var(--color-valid)]"
-                        : target.required
+                        : needsMapping
                           ? "bg-rose-500/10 hover:bg-rose-500/15 border-l-4 border-l-rose-500"
                           : "bg-[var(--color-surface)] hover:bg-[var(--color-surface-sunken)] border-l-4 border-l-[var(--color-line)]";
 
@@ -1402,7 +1533,13 @@ export default function ComparePage({ onNavigate }) {
                             </span>
                             <span className="block mt-0.5 font-mono text-[10px] text-[var(--color-ink-muted)]">
                               {target.dbField === "doc_no" ? "loss_ref" : target.dbField}
-                              {target.required ? " · Wajib" : " · Opsional"}
+                              {target.required
+                                ? " · Wajib"
+                                : target.requiredAnyGroup
+                                  ? requiredGroupSatisfied
+                                    ? " · Alternatif (terpenuhi)"
+                                    : " · Wajib: salah satu"
+                                  : " · Opsional"}
                             </span>
                           </td>
 
@@ -1448,7 +1585,7 @@ export default function ComparePage({ onNavigate }) {
                                 <CheckCircleIcon className="w-3.5 h-3.5 shrink-0" />
                                 <span>TERPETAKAN</span>
                               </span>
-                            ) : target.required ? (
+                            ) : needsMapping ? (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-control)] bg-rose-500/15 text-rose-600 font-bold text-[11px] border border-rose-500/30">
                                 <ExclamationCircleIcon className="w-3.5 h-3.5 shrink-0" />
                                 <span>WAJIB DIPETAKAN</span>
@@ -1478,9 +1615,11 @@ export default function ComparePage({ onNavigate }) {
             </Button>
 
             <div className="flex flex-col items-end gap-2">
-              {missingRequiredTargets.length > 0 && (
+              {missingRequiredCount > 0 && (
                 <p className="text-xs font-semibold text-rose-600" role="status">
-                  Sheet ini belum lengkap. Sheet lain yang cocok tetap diproses; sheet yang perlu mapping masuk Perlu Ditinjau.
+                  {isInfopack
+                    ? "Sheet ini belum lengkap: wajib petakan Loss Ref, DOL, Gross, dan minimal salah satu Surplus Outstanding / QS Outstanding. Class Code mengikuti Mapping Rules; tanpa kolom/rule yang cocok, field ini opsional."
+                    : "Sheet ini belum lengkap. Sheet lain yang cocok tetap diproses; sheet yang perlu mapping masuk Perlu Ditinjau."}
                 </p>
               )}
               <div className="flex items-center gap-2">

@@ -306,6 +306,35 @@ def _excel_header_names(values) -> list[str]:
     return headers
 
 
+def _extract_sheet_metadata(rows, header_row: int) -> dict[str, str]:
+    metadata = {}
+    for row in rows[:header_row]:
+        for index, value in enumerate(row):
+            if value is None:
+                continue
+            text_value = str(value).strip()
+            label = re.sub(r"[^a-z]", "", text_value.casefold())
+            if label not in {"classofbusiness", "classofbusniess"}:
+                continue
+
+            inline_value = text_value.partition(":")[2].strip()
+            if inline_value:
+                metadata["cob"] = inline_value
+                break
+            for candidate in row[index + 1 :]:
+                if candidate is None:
+                    continue
+                candidate_value = str(candidate).strip().strip(":").strip()
+                if candidate_value:
+                    metadata["cob"] = candidate_value
+                    break
+            if metadata.get("cob"):
+                break
+        if metadata.get("cob"):
+            break
+    return metadata
+
+
 def _select_header_row(raw: pd.DataFrame, max_scan: int = 40) -> int:
     raw = raw.head(max_scan).fillna("")
     best_row = 0
@@ -993,7 +1022,13 @@ def _ingest_excel_raw_openpyxl(workbook, sheet_name: Optional[str]) -> dict:
     row_iterator = worksheet.iter_rows(values_only=True)
     preview_rows = list(islice(row_iterator, 40))
     if not preview_rows:
-        return {"sheet": target, "columns": [], "total_rows": 0, "rows": []}
+        return {
+            "sheet": target,
+            "columns": [],
+            "total_rows": 0,
+            "rows": [],
+            "sheet_metadata": {},
+        }
     preview_width = max(
         (
             next(
@@ -1009,9 +1044,16 @@ def _ingest_excel_raw_openpyxl(workbook, sheet_name: Optional[str]) -> dict:
         default=0,
     )
     if not preview_width:
-        return {"sheet": target, "columns": [], "total_rows": 0, "rows": []}
+        return {
+            "sheet": target,
+            "columns": [],
+            "total_rows": 0,
+            "rows": [],
+            "sheet_metadata": {},
+        }
     preview_rows = [row[:preview_width] for row in preview_rows]
     header_row = _select_header_row(pd.DataFrame(preview_rows))
+    sheet_metadata = _extract_sheet_metadata(preview_rows, header_row)
     header_values = list(preview_rows[header_row])
     max_data_width = preview_width
     rows = []
@@ -1053,6 +1095,7 @@ def _ingest_excel_raw_openpyxl(workbook, sheet_name: Optional[str]) -> dict:
         "columns": headers,
         "total_rows": len(parsed_rows),
         "rows": parsed_rows,
+        "sheet_metadata": sheet_metadata,
     }
 
 

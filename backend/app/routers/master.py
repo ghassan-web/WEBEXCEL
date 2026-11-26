@@ -146,7 +146,7 @@ DOL_PATTERNS = (
 )
 CURRENCY_PATTERNS = (
     r"^Currency$", r"^Curr$", r"^curr$", r"^Mata Uang$",
-    r"^currency$", r"^CCY$", r"^ccy$",
+    r"^currency$", r"^CCY$", r"^ccy$", r"\bcurr(?:ency)?\b",
 )
 DOC_NO_PATTERNS = (
     r"doc.*(no|number|ref)",
@@ -155,6 +155,14 @@ DOC_NO_PATTERNS = (
     r"(policy|certificate).*(no|number|ref)",
     r"^no$",
     r"nomor",
+)
+INFOPACK_LOSS_REF_PATTERNS = (
+    r"doc.*(no|number|ref)",
+    r"loss.*(ref|reference|no|number)",
+    r"claim.*(no|number|ref|reference|id)",
+    r"ref(erence)?.*(no|number)",
+    r"invoice.*(no|number|ref)",
+    r"(nomor|no\.?)\s*(klaim|dokumen)",
 )
 DOC_NO_DATE_HEADER_PATTERNS = (
     r"\bdate\b",
@@ -176,9 +184,10 @@ VALUE_PATTERNS = (
 )
 COB_PATTERNS = (
     r"\bcob\b", r"class of business", r"business class",
-) + CLASS_CODE_PATTERNS
+)
 GROSS_PATTERNS = (
     r"^Gross$", r"^Gross Premium$", r"^Gross Amount$", r"gross",
+    r"incurred|bruto", r"(claim|loss)\s*(amount|value)",
 )
 TSI_PATTERNS = (
     r"^TSI\b", r"^Total Sum Insured$", r"^Sum Insured$",
@@ -405,6 +414,117 @@ def _normalize_mapping_value(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip()).casefold()
 
 
+def _normalize_mapping_source_file_name(file_name: str) -> str:
+    normalized_name = _normalize_mapping_value(_detect_file_name(file_name))
+    return re.sub(r"\s*\(\d+\)(?=\.[^.]+$)", "", normalized_name)
+
+
+def _match_infopack_mapping_header(
+    configured_header: str,
+    headers: list[str],
+) -> Optional[str]:
+    normalized = _normalize_mapping_value(configured_header)
+    exact = next(
+        (
+            header
+            for header in headers
+            if _normalize_mapping_value(header) == normalized
+        ),
+        None,
+    )
+    if exact:
+        return exact
+
+    def compact(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", _normalize_mapping_value(value))
+
+    compact_configured = compact(configured_header)
+    compact_matches = [
+        header
+        for header in headers
+        if compact(header) == compact_configured
+    ]
+    if len(compact_matches) == 1:
+        return compact_matches[0]
+
+    without_number_suffix = re.sub(r"(?:no|number)$", "", compact_configured)
+    suffix_matches = [
+        header
+        for header in headers
+        if compact(header) == without_number_suffix
+    ]
+    return suffix_matches[0] if len(suffix_matches) == 1 else None
+
+
+def _mapping_argument_sheet_names(argument: dict) -> list[str]:
+    sheet_names = argument.get("sheet_names") or []
+    if isinstance(sheet_names, str):
+        sheet_names = [sheet_names]
+    if sheet_names:
+        return [str(name).strip() for name in sheet_names if str(name).strip()]
+
+    source_tables = argument.get("source_tables") or []
+    if not isinstance(source_tables, list):
+        raise HTTPException(
+            status_code=500,
+            detail="Daftar source_tables pada mapping tersimpan tidak valid.",
+        )
+    return list(
+        dict.fromkeys(
+            str(source.get("sheet_name") or "").strip()
+            for source in source_tables
+            if isinstance(source, dict) and str(source.get("sheet_name") or "").strip()
+        )
+    )
+
+
+def _mapping_source_match_score(
+    argument: dict,
+    sheet_name: str,
+    file_name: Optional[str] = None,
+) -> int:
+    source_tables = argument.get("source_tables") or []
+    if source_tables:
+        if not isinstance(source_tables, list):
+            raise HTTPException(
+                status_code=500,
+                detail="Daftar source_tables pada mapping tersimpan tidak valid.",
+            )
+        matching_sources = [
+            source
+            for source in source_tables
+            if isinstance(source, dict)
+            and (
+                not source.get("sheet_name")
+                or _normalize_mapping_value(str(source["sheet_name"]))
+                == _normalize_mapping_value(sheet_name)
+            )
+        ]
+        if not matching_sources:
+            return 0
+        if file_name:
+            requested_file = _normalize_mapping_source_file_name(file_name)
+            if any(
+                source.get("file_name")
+                and _normalize_mapping_source_file_name(
+                    str(source["file_name"])
+                ) == requested_file
+                for source in matching_sources
+            ):
+                return 2
+        return 1
+
+    sheet_names = argument.get("sheet_names") or []
+    if isinstance(sheet_names, str):
+        sheet_names = [sheet_names]
+    if sheet_names and not any(
+        _normalize_mapping_value(name) == _normalize_mapping_value(sheet_name)
+        for name in sheet_names
+    ):
+        return 0
+    return 1
+
+
 def _mapping_table_for_dataset(dataset_type: str) -> str:
     if str(dataset_type).strip().upper() == "INFOPACK":
         return "rekonsiliasi.master_mapping_column_infopack"
@@ -418,22 +538,22 @@ def _load_column_mapping(
     cedant_code: str,
     sheet_name: str,
     is_infopack: bool,
+    file_name: Optional[str] = None,
 ) -> dict:
     """
     Load mappings from the dataset-specific mapping table.
     Returns dict: { field_name: excel_column_name }
     Misal: { "doc_no": "DocNo", "dol": "DOL", "outstanding": "Amount_Net_OS" }
 
-    Filtering:
-    - cedant_code harus cocok
-    - sheet_name harus ada di argument.sheet_names (atau sheet_names kosong = semua sheet)
-    - is_active = True
+    InfoPack reads saved rules by source context regardless of is_active.
+    OS Cedant continues to use active rules only.
     """
     if not cedant_code:
         return {}
     mapping_table = _mapping_table_for_dataset(
         "INFOPACK" if is_infopack else "OS CEDANT"
     )
+    active_filter = "" if is_infopack else "AND m.is_active = TRUE "
     try:
         rows = db.execute(
             text(
@@ -441,7 +561,8 @@ def _load_column_mapping(
                 "m.mapping_version "
                 f"FROM {mapping_table} m "
                 "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
-                "WHERE m.cedant_code = :cc AND m.is_active = TRUE "
+                "WHERE m.cedant_code = :cc "
+                f"{active_filter}"
                 "AND UPPER(BTRIM(f.dataset_type)) = :dataset_type "
                 "ORDER BY m.mapping_version DESC"
             ),
@@ -493,9 +614,12 @@ def _load_column_mapping(
             active_mapping = by_version[max(by_version)]
 
     else:
+        by_version: dict[int, dict[str, str]] = {}
+        version_scores: dict[int, int] = {}
+        source_scoped_versions: set[int] = set()
         for row in rows:
             excel_name = row.get("excel_name") or ""
-            field_name = _canonical_field_name(row.get("field_name") or "")
+            field_name = _mapping_key(row.get("field_name") or "")
             if not excel_name or not field_name:
                 continue
 
@@ -507,18 +631,38 @@ def _load_column_mapping(
                     status_code=500,
                     detail=f"Argument mapping untuk cedant {cedant_code} tidak valid.",
                 )
-            sheet_names = argument.get("sheet_names") or []
-            if isinstance(sheet_names, str):
-                sheet_names = [sheet_names]
-
-            if sheet_names and sheet_name:
-                if not any(
-                    _normalize_mapping_value(str(sheet)) == _normalize_mapping_value(sheet_name)
-                    for sheet in sheet_names
-                ):
-                    continue
-
-            active_mapping.setdefault(field_name, excel_name)
+            match_score = _mapping_source_match_score(
+                argument,
+                sheet_name,
+                file_name,
+            )
+            if not match_score:
+                continue
+            version = int(row["mapping_version"])
+            by_version.setdefault(version, {}).setdefault(field_name, excel_name)
+            if argument.get("source_tables"):
+                source_scoped_versions.add(version)
+            version_scores[version] = max(
+                match_score,
+                version_scores.get(version, match_score),
+            )
+        if by_version:
+            exact_versions = [
+                version
+                for version in by_version
+                if version_scores[version] == 2
+            ]
+            source_scoped_candidates = [
+                version
+                for version in source_scoped_versions
+                if version in by_version
+            ]
+            if exact_versions:
+                active_mapping = by_version[max(exact_versions)]
+            elif len(source_scoped_candidates) == 1:
+                active_mapping = by_version[source_scoped_candidates[0]]
+            elif not source_scoped_candidates:
+                active_mapping = by_version[max(by_version)]
 
     _, stored_mapping = _load_confirmed_upload_mapping(
         db,
@@ -527,10 +671,16 @@ def _load_column_mapping(
         sheet_name,
     )
     history_mapping = {
-        _canonical_field_name(str(field_name)): str(header).strip()
+        (
+            _mapping_key(str(field_name))
+            if is_infopack
+            else _canonical_field_name(str(field_name))
+        ): str(header).strip()
         for field_name, header in stored_mapping.items()
         if header is not None and str(header).strip()
     }
+    if is_infopack and rows:
+        return active_mapping
     return {**history_mapping, **active_mapping}
 
 
@@ -653,7 +803,11 @@ def _build_mapping_version_profiles(rows: list[dict]) -> list[dict]:
                 status_code=500,
                 detail="Argument mapping tersimpan tidak valid.",
             )
-        sheet_names = argument.get("sheet_names") or []
+        sheet_names = (
+            _mapping_argument_sheet_names(argument)
+            if dataset_type == "INFOPACK"
+            else argument.get("sheet_names") or []
+        )
         if isinstance(sheet_names, str):
             sheet_names = [sheet_names]
         scopes = [
@@ -829,7 +983,11 @@ def get_column_mappings(db: Session = Depends(get_db)):
                 status_code=500,
                 detail="Argument mapping tersimpan tidak valid.",
             )
-        sheet_names = argument.get("sheet_names") or []
+        sheet_names = (
+            _mapping_argument_sheet_names(argument)
+            if key[1] == "INFOPACK"
+            else argument.get("sheet_names") or []
+        )
         if isinstance(sheet_names, str):
             sheet_names = [sheet_names]
         normalized_sheets = {
@@ -867,6 +1025,43 @@ def get_column_mappings(db: Session = Depends(get_db)):
                     "argument": {"sheet_names": [sheet_name]} if sheet_name else {},
                 }
             )
+
+    def infopack_profile_scope(row: dict) -> tuple[str, tuple[str, ...]]:
+        argument = row.get("argument") or {}
+        if isinstance(argument, str):
+            argument = json.loads(argument)
+        if not isinstance(argument, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Argument mapping tersimpan tidak valid.",
+            )
+        sheet_names = _mapping_argument_sheet_names(argument)
+        scope = tuple(
+            sorted(
+                _normalize_mapping_value(str(sheet))
+                for sheet in sheet_names
+                if str(sheet).strip()
+            )
+        )
+        return str(row.get("cedant_code") or ""), scope
+
+    latest_infopack_versions = {}
+    for row in rows:
+        if str(row.get("dataset_type") or "").strip().upper() != "INFOPACK":
+            continue
+        scope_key = infopack_profile_scope(row)
+        version = int(row.get("mapping_version") or 0)
+        latest_infopack_versions[scope_key] = max(
+            version,
+            latest_infopack_versions.get(scope_key, version),
+        )
+    rows = [
+        row
+        for row in rows
+        if str(row.get("dataset_type") or "").strip().upper() != "INFOPACK"
+        or int(row.get("mapping_version") or 0)
+        == latest_infopack_versions[infopack_profile_scope(row)]
+    ]
 
     normalized_mapping_fields = {}
     for row in mapping_fields:
@@ -909,10 +1104,13 @@ def get_column_mappings(db: Session = Depends(get_db)):
             argument = json.loads(argument)
         if not isinstance(argument, dict):
             argument = {}
-        sheet_names = argument.get("sheet_names") or []
+        sheet_names = (
+            _mapping_argument_sheet_names(argument)
+            if dataset_type == "INFOPACK"
+            else argument.get("sheet_names") or []
+        )
         if isinstance(sheet_names, str):
             sheet_names = [sheet_names]
-        sheet_names = [str(sheet).strip() for sheet in sheet_names if str(sheet).strip()]
         cedant_code = row.get("cedant_code") or ""
         cedant_name = row.get("cedant_name") or cedant_code or "—"
         key = (cedant_code, cedant_name, tuple(sorted(sheet.lower() for sheet in sheet_names)))
@@ -1287,7 +1485,11 @@ def _detect_cedant_from_mapping(db: Session, rows: list, sheet_name: str):
                 status_code=500,
                 detail=f"Argument mapping untuk cedant {mapping['cedant_code']} tidak valid.",
             )
-        sheet_names = argument.get("sheet_names") or []
+        sheet_names = (
+            _mapping_argument_sheet_names(argument)
+            if dataset_type == "INFOPACK"
+            else argument.get("sheet_names") or []
+        )
         if isinstance(sheet_names, str):
             sheet_names = [sheet_names]
         if sheet_names and sheet_name and not any(
@@ -1400,10 +1602,19 @@ def _extract_infopack_row(
         class_code = class_code[:50]
     title = get_col("title", INSURED_PATTERNS) or None
     value = get_col("value", VALUE_PATTERNS) or None
+    loss_ref = get_col("loss_ref", INFOPACK_LOSS_REF_PATTERNS) or None
     raw_dol = get_col("dol", DOL_PATTERNS)
     raw_gross = get_col("gross", GROSS_PATTERNS)
     raw_tsi = get_col("tsi", TSI_PATTERNS)
     cob = get_col("cob", COB_PATTERNS) or None
+    raw_surplus_outstanding = get_col(
+        "surplus_outstanding",
+        (r"\bsurplus\b.*\b(outstanding|os)\b", r"\bsurplus\s*(?:os|outstanding)\b"),
+    )
+    raw_qs_outstanding = get_col(
+        "qs_outstanding",
+        (r"\b(?:qs|quota\s*share)\b.*\b(outstanding|os)\b",),
+    )
     if cob and len(cob) > 100:
         cob = cob[:100]
     return {
@@ -1411,6 +1622,7 @@ def _extract_infopack_row(
         "class_code":  class_code,
         "title":       title,
         "value":       value,
+        "loss_ref":    loss_ref,
         "row_index":   row_index,
         "month":       int(bulan) if bulan and str(bulan).isdigit() else None,
         "year":        int(tahun) if tahun and str(tahun).isdigit() else None,
@@ -1420,6 +1632,8 @@ def _extract_infopack_row(
         "cob":         cob,
         "gross":       _parse_decimal(raw_gross),
         "tsi":         _parse_decimal(raw_tsi),
+        "surplus_outstanding": raw_surplus_outstanding or None,
+        "qs_outstanding": raw_qs_outstanding or None,
     }
 
 
@@ -1440,7 +1654,9 @@ def _replace_cedant_master_period(
     month: int,
     year: int,
     batch_id: int,
+    master_table: str = CEDANT_TABLE,
 ) -> tuple[int, bool]:
+    qualified_master_table = _qualified_master_table(master_table)
     lock_key = f"{cedant_code}|{month}|{year}"
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
@@ -1460,7 +1676,7 @@ def _replace_cedant_master_period(
 
     result = db.execute(
         text(
-            "DELETE FROM rekonsiliasi.master_os_cedant_web "
+            f"DELETE FROM {qualified_master_table} "
             "WHERE cedant_code = :cedant_code "
             "AND month = :month AND year = :year"
         ),
@@ -1628,14 +1844,22 @@ def _write_infopack_rows(db: Session, rows: list) -> dict:
         return {"inserted": 0, "skipped": skipped, "updated": 0}
     BATCH = 1000
     inserted = 0
+    persisted_fields = (
+        "cedant_code", "class_code", "title", "value", "row_index", "month",
+        "year", "file_name", "sheet_name", "dol", "cob", "gross", "tsi",
+    )
     for i in range(0, len(rows), BATCH):
+        parameters = [
+            {field: row.get(field) for field in persisted_fields}
+            for row in rows[i:i + BATCH]
+        ]
         db.execute(
             text("INSERT INTO rekonsiliasi.master_os_infopack_web "
                  "(cedant_code, class_code, title, value, row_index, month, year, file_name, "
                  "sheet_name, dol, cob, gross, tsi) "
                  "VALUES (:cedant_code, :class_code, :title, :value, :row_index, :month, :year, "
                  ":file_name, :sheet_name, :dol, :cob, :gross, :tsi)"),
-            rows[i:i + BATCH],
+            parameters,
         )
         inserted += len(rows[i:i + BATCH])
     return {"inserted": inserted, "skipped": skipped, "updated": 0}
@@ -1674,11 +1898,25 @@ CEDANT_TARGET_SCHEMA = [
 
 INFOPACK_TARGET_SCHEMA = [
     {
+        "dbField": "loss_ref",
+        "label": "Loss Ref / Claim No",
+        "required": True,
+        "sqlType": "TEXT",
+        "description": "Nomor referensi atau nomor klaim",
+    },
+    {
         "dbField": "class_code",
-        "label": "Class Code (COB)",
+        "label": "Class Code",
         "required": False,
         "sqlType": "VARCHAR(50)",
-        "description": "Kode lini bisnis / Class of Business",
+        "description": "Kode kelas bisnis dari kolom Excel",
+    },
+    {
+        "dbField": "insured",
+        "label": "Insured",
+        "required": False,
+        "sqlType": "TEXT",
+        "description": "Nama tertanggung",
     },
     {
         "dbField": "dol",
@@ -1688,48 +1926,69 @@ INFOPACK_TARGET_SCHEMA = [
         "description": "Tanggal terjadinya kerugian",
     },
     {
-        "dbField": "cob",
-        "label": "Class of Business (COB)",
-        "required": True,
-        "sqlType": "VARCHAR(100)",
-        "description": "Kelas bisnis Infopack",
-    },
-    {
         "dbField": "gross",
-        "label": "Gross",
+        "label": "Gross (100% Claim)",
         "required": True,
         "sqlType": "NUMERIC(30, 2)",
-        "description": "Nilai gross",
+        "description": "Nilai klaim pada basis 100%",
     },
     {
-        "dbField": "tsi",
-        "label": "Total Sum Insured (TSI)",
-        "required": True,
-        "sqlType": "NUMERIC(30, 2)",
-        "description": "Total nilai pertanggungan",
+        "dbField": "surplus_outstanding",
+        "label": "Surplus Outstanding",
+        "required": False,
+        "requiredAnyGroup": "infopack_outstanding",
+        "sqlType": "NUMERIC",
+        "description": "Porsi klaim outstanding Surplus",
     },
     {
-        "dbField": "title",
-        "label": "Title / Insured / Uraian",
+        "dbField": "qs_outstanding",
+        "label": "QS Outstanding",
+        "required": False,
+        "requiredAnyGroup": "infopack_outstanding",
+        "sqlType": "NUMERIC",
+        "description": "Porsi klaim outstanding Quota Share",
+    },
+    {
+        "dbField": "currency",
+        "label": "Currency",
         "required": False,
         "sqlType": "TEXT",
-        "description": "Nama tertanggung atau judul baris InfoPack",
+        "description": "Kode mata uang",
     },
     {
-        "dbField": "value",
-        "label": "Value / Gross Amount",
+        "dbField": "policy_number",
+        "label": "Policy Number",
         "required": False,
         "sqlType": "TEXT",
-        "description": "Nilai angka / nominal pada laporan InfoPack",
+        "description": "Nomor polis (opsional)",
+    },
+    {
+        "dbField": "policy_comm_date",
+        "label": "Policy Commencement Date",
+        "required": False,
+        "sqlType": "DATE",
+        "description": "Tanggal mulai polis (opsional)",
+    },
+    {
+        "dbField": "policy_expiry_date",
+        "label": "Policy Expiry Date",
+        "required": False,
+        "sqlType": "DATE",
+        "description": "Tanggal akhir polis (opsional)",
     },
 ]
 
-INFOPACK_REQUIRED_FIELDS = ("dol", "cob", "gross", "tsi")
+INFOPACK_REQUIRED_FIELDS = ("loss_ref", "dol", "gross")
+INFOPACK_REQUIRED_ALTERNATIVES = (("surplus_outstanding", "qs_outstanding"),)
 INFOPACK_FIELD_LABELS = {
+    "loss_ref": "Loss Ref",
     "dol": "DOL",
+    "class_code": "Class Code",
     "cob": "COB",
     "gross": "Gross",
-    "tsi": "TSI",
+    "surplus_outstanding": "Surplus Outstanding",
+    "qs_outstanding": "QS Outstanding",
+    "infopack_outstanding": "Surplus Outstanding atau QS Outstanding",
 }
 WORKFLOW_RAW_META_KEY = "__claim_on_duty__"
 MAPPING_FIELD_ALIASES = {
@@ -1745,12 +2004,22 @@ VIRTUAL_MAPPING_FIELDS = {"cob", "tsi", "value", "doc_no", "title", "outstanding
 
 def _validate_infopack_headers(columns: list[str], col_map: dict) -> None:
     available = {_normalize_mapping_value(str(column)) for column in columns}
+    normalized_mapping = {
+        _mapping_key(str(field)): header for field, header in col_map.items()
+    }
     missing = [
         INFOPACK_FIELD_LABELS[field]
         for field in INFOPACK_REQUIRED_FIELDS
-        if not col_map.get(field)
-        or _normalize_mapping_value(str(col_map[field])) not in available
+        if not normalized_mapping.get(field)
+        or _normalize_mapping_value(str(normalized_mapping[field])) not in available
     ]
+    for alternatives in INFOPACK_REQUIRED_ALTERNATIVES:
+        if not any(
+            normalized_mapping.get(field)
+            and _normalize_mapping_value(str(normalized_mapping[field])) in available
+            for field in alternatives
+        ):
+            missing.append(INFOPACK_FIELD_LABELS["infopack_outstanding"])
     if missing:
         raise HTTPException(
             status_code=422,
@@ -1766,7 +2035,8 @@ def _validate_infopack_rows(
 ) -> None:
     invalid_rows = []
     relevant_fields = (
-        "class_code", "title", "value", "dol", "cob", "gross", "tsi",
+        "loss_ref", "insured", "value", "dol", "cob", "gross",
+        "surplus_outstanding", "qs_outstanding",
     )
     for row_index, row in rows_by_index.items():
         if not any(row.get(field) not in (None, "") for field in relevant_fields):
@@ -1776,6 +2046,20 @@ def _validate_infopack_rows(
             for field in INFOPACK_REQUIRED_FIELDS
             if row.get(field) is None or row.get(field) == ""
         ]
+        for alternatives in INFOPACK_REQUIRED_ALTERNATIVES:
+            if not any(
+                row.get(field) not in (None, "")
+                and _parse_decimal(row.get(field)) is not None
+                for field in alternatives
+            ):
+                missing.append(INFOPACK_FIELD_LABELS["infopack_outstanding"])
+            invalid_amounts = [
+                INFOPACK_FIELD_LABELS[field]
+                for field in alternatives
+                if row.get(field) not in (None, "")
+                and _parse_decimal(row.get(field)) is None
+            ]
+            missing.extend(f"{field} (nilai tidak valid)" for field in invalid_amounts)
         if missing:
             excel_row = row_index if row_numbers_are_excel else row_index + 2
             invalid_rows.append(f"{excel_row} ({', '.join(missing)})")
@@ -1796,7 +2080,7 @@ def _dataset_type(tipe_data: str) -> str:
 
 def _workflow_required_fields(dataset_type: str) -> tuple[str, ...]:
     if dataset_type == "INFOPACK":
-        return ("dol", "gross", "cob", "tsi")
+        return INFOPACK_REQUIRED_FIELDS
     return ("loss_ref", "outstanding")
 
 
@@ -1815,9 +2099,39 @@ def _load_field_catalog(db: Session, dataset_type: str) -> list[dict]:
     ]
 
 
+def _target_schema_for_catalog(dataset_type: str, catalog: list[dict]) -> list[dict]:
+    if dataset_type != "INFOPACK":
+        return CEDANT_TARGET_SCHEMA
+    column_fields = {
+        field["field_name"]: field
+        for field in catalog
+        if field.get("default_source") == "column"
+    }
+    return [
+        {
+            **target,
+            **(
+                {
+                    "fieldId": column_fields[target["dbField"]].get("field_id"),
+                    "dataType": column_fields[target["dbField"]].get("data_type"),
+                }
+                if target["dbField"] in column_fields
+                else {}
+            ),
+        }
+        for target in INFOPACK_TARGET_SCHEMA
+        if target["dbField"] != "cob" and target["dbField"] in column_fields
+    ]
+
+
 def _mapping_key(field_name: str) -> str:
     normalized = _normalize_field_name(field_name)
     return MAPPING_FIELD_ALIASES.get(normalized, normalized)
+
+
+def _infopack_mapping_key(field_name: str) -> str:
+    field = _mapping_key(field_name)
+    return "class_code" if field == "cob" else field
 
 
 def _auto_mapping_for_catalog(
@@ -1826,39 +2140,84 @@ def _auto_mapping_for_catalog(
     catalog: list[dict],
     existing_mapping: Optional[dict] = None,
     protected_fields: Optional[set[str]] = None,
+    allow_fallback_when_rule_misses: bool = False,
 ) -> dict[str, str]:
     is_infopack = dataset_type == "INFOPACK"
-    mapping_field_aliases = {
-        "doc_no": "doc_no",
-        "loss_ref": "doc_no",
-        "title": "title",
-        "insured": "title",
-    }
-    mapping_for_match = {
-        mapping_field_aliases.get(field_name, field_name): header
-        for field_name, header in (existing_mapping or {}).items()
-    }
-    for field_name in protected_fields or ():
-        match_field = mapping_field_aliases.get(field_name, field_name)
-        mapping_for_match.setdefault(match_field, None)
+    if is_infopack:
+        mapping_for_match = {}
+        for field_name, header in (existing_mapping or {}).items():
+            field_key = _infopack_mapping_key(str(field_name))
+            if field_key == "class_code" and _mapping_key(str(field_name)) == "cob":
+                mapping_for_match.setdefault(field_key, header)
+            else:
+                mapping_for_match[field_key] = header
+        if allow_fallback_when_rule_misses:
+            mapping_for_match = {
+                field_name: header
+                for field_name, header in mapping_for_match.items()
+                if header
+                and _match_infopack_mapping_header(str(header), headers)
+            }
+        for field_name in protected_fields or ():
+            mapping_for_match.setdefault(_infopack_mapping_key(field_name), None)
+    else:
+        mapping_field_aliases = {
+            "doc_no": "doc_no",
+            "loss_ref": "doc_no",
+            "title": "title",
+            "insured": "title",
+        }
+        mapping_for_match = {
+            mapping_field_aliases.get(field_name, field_name): header
+            for field_name, header in (existing_mapping or {}).items()
+        }
+        for field_name in protected_fields or ():
+            match_field = mapping_field_aliases.get(field_name, field_name)
+            mapping_for_match.setdefault(match_field, None)
     inferred = _auto_match_headers_for_sheet(
         headers, is_infopack, mapping_for_match
     )
-    allowed = {field["field_name"] for field in catalog}
-    allowed.update(VIRTUAL_MAPPING_FIELDS)
+    allowed = {
+        field["field_name"]
+        for field in catalog
+        if field.get("default_source") == "column"
+    }
+    allowed.update(
+        VIRTUAL_MAPPING_FIELDS - {"cob"} if is_infopack else VIRTUAL_MAPPING_FIELDS
+    )
     result = {}
     for field_name, header in inferred.items():
-        key = _mapping_key(field_name)
+        key = (
+            _infopack_mapping_key(field_name)
+            if is_infopack
+            else _mapping_key(field_name)
+        )
         if key in allowed and header in headers:
-            result[key] = header
-    if is_infopack:
-        if "cob" not in result and result.get("class_code"):
-            result["cob"] = result["class_code"]
-        if "tsi" not in result:
-            tsi_header = _match_header_by_patterns(headers, TSI_PATTERNS)
-            if tsi_header:
-                result["tsi"] = tsi_header
+            if key != "class_code" or field_name == "class_code":
+                result[key] = header
+            else:
+                result.setdefault(key, header)
     return result
+
+
+def _infopack_rule_mapping(
+    headers: list[str],
+    catalog: list[dict],
+    rule_mapping: dict[str, str],
+) -> dict[str, str]:
+    protected_fields = {
+        _infopack_mapping_key(str(field["field_name"]))
+        for field in catalog
+        if field.get("default_source") == "column"
+    }
+    protected_fields.update(VIRTUAL_MAPPING_FIELDS - {"cob"})
+    return _auto_mapping_for_catalog(
+        headers,
+        "INFOPACK",
+        catalog,
+        rule_mapping,
+        protected_fields=protected_fields,
+    )
 
 
 def _suggest_existing_mapping(
@@ -1868,14 +2227,21 @@ def _suggest_existing_mapping(
     sheet_name: str,
     headers: list[str],
     catalog: list[dict],
+    file_name: Optional[str] = None,
 ) -> tuple[Optional[int], dict[str, str], set[str]]:
     mapping_table = _mapping_table_for_dataset(dataset_type)
+    active_filter = (
+        ""
+        if dataset_type.upper() == "INFOPACK"
+        else "AND m.is_active = TRUE "
+    )
     rows = db.execute(
         text(
             "SELECT m.mapping_version, f.field_name, m.header_name, m.argument "
             f"FROM {mapping_table} m "
             "JOIN rekonsiliasi.master_field f ON f.field_id = m.field_id "
-            "WHERE m.cedant_code = :cedant_code AND m.is_active = TRUE "
+            "WHERE m.cedant_code = :cedant_code "
+            f"{active_filter}"
             "AND UPPER(BTRIM(f.dataset_type)) = :dataset_type "
             "ORDER BY m.mapping_version DESC, m.column_index"
         ),
@@ -1885,12 +2251,16 @@ def _suggest_existing_mapping(
     catalog_fields = {
         field["field_name"]
         for field in catalog
-        if dataset_type.upper() != "OS CEDANT"
-        or field.get("default_source") == "column"
+        if field.get("default_source") == "column"
     }
     by_version: dict[int, dict[str, str]] = {}
     configured_fields_by_version: dict[int, set[str]] = {}
+    version_scores: dict[int, int] = {}
+    source_scoped_versions: set[int] = set()
+    all_rule_fields: set[str] = set()
+    has_rule_rows = False
     for row in rows:
+        has_rule_rows = True
         argument = row.get("argument") or {}
         if isinstance(argument, str):
             try:
@@ -1901,29 +2271,90 @@ def _suggest_existing_mapping(
                 ) from exc
         if not isinstance(argument, dict):
             raise HTTPException(status_code=500, detail="Argument mapping tersimpan tidak valid.")
+        raw_field_name = row.get("field_name") or ""
+        field_name = raw_field_name
+        is_legacy_cob_rule = False
+        if dataset_type.upper() == "INFOPACK":
+            is_legacy_cob_rule = _mapping_key(field_name) == "cob"
+            field_name = _infopack_mapping_key(field_name)
+        header_name = row.get("header_name") or ""
         sheet_names = argument.get("sheet_names") or []
         if isinstance(sheet_names, str):
             sheet_names = [sheet_names]
-        if (
-            dataset_type.upper() != "OS CEDANT"
-            and sheet_names
-            and not any(
-                _normalize_mapping_value(str(name))
-                == _normalize_mapping_value(sheet_name)
-                for name in sheet_names
+        if dataset_type.upper() == "INFOPACK":
+            match_score = _mapping_source_match_score(
+                argument,
+                sheet_name,
+                file_name,
             )
-        ):
-            continue
-        field_name = row.get("field_name") or ""
-        header_name = row.get("header_name") or ""
+            if not match_score:
+                continue
+            if field_name in catalog_fields and header_name:
+                configured_header = header_lookup.get(
+                    _normalize_mapping_value(header_name)
+                ) or _match_infopack_mapping_header(header_name, headers)
+                if field_name != "class_code" or configured_header:
+                    all_rule_fields.add(field_name)
+        else:
+            match_score = 1
+            if (
+                dataset_type.upper() != "OS CEDANT"
+                and sheet_names
+                and not any(
+                    _normalize_mapping_value(str(name))
+                    == _normalize_mapping_value(sheet_name)
+                    for name in sheet_names
+                )
+            ):
+                continue
         if field_name not in catalog_fields or not header_name:
             continue
         version = int(row["mapping_version"])
         by_version.setdefault(version, {})
-        configured_fields_by_version.setdefault(version, set()).add(field_name)
+        version_scores[version] = max(
+            match_score,
+            version_scores.get(version, match_score),
+        )
+        if dataset_type.upper() == "INFOPACK" and argument.get("source_tables"):
+            source_scoped_versions.add(version)
         header = header_lookup.get(_normalize_mapping_value(header_name))
+        if not header and dataset_type.upper() == "INFOPACK":
+            header = _match_infopack_mapping_header(header_name, headers)
+        if field_name == "class_code" and not header:
+            continue
+        configured_fields_by_version.setdefault(version, set()).add(field_name)
         if header:
-            by_version[version][field_name] = header
+            if is_legacy_cob_rule:
+                by_version[version].setdefault(field_name, header)
+            else:
+                by_version[version][field_name] = header
+
+    if dataset_type.upper() == "INFOPACK" and configured_fields_by_version:
+        exact_versions = [
+            version
+            for version in configured_fields_by_version
+            if version_scores[version] == 2
+        ]
+        source_scoped_candidates = [
+            version
+            for version in source_scoped_versions
+            if version in configured_fields_by_version
+        ]
+        if exact_versions:
+            version = max(exact_versions)
+        elif len(source_scoped_candidates) == 1:
+            version = source_scoped_candidates[0]
+        elif source_scoped_candidates:
+            return None, {}, all_rule_fields
+        else:
+            version = max(configured_fields_by_version)
+        return (
+            version,
+            by_version.get(version, {}),
+            configured_fields_by_version[version],
+        )
+    if dataset_type.upper() == "INFOPACK" and has_rule_rows:
+        return None, {}, all_rule_fields
 
     required = _workflow_required_fields(dataset_type)
     ranked = sorted(
@@ -1949,13 +2380,21 @@ def _suggest_existing_mapping(
         selected = {}
         configured_fields = set()
         for raw_field, raw_header in stored_mapping.items():
-            field_name = _mapping_key(str(raw_field))
+            raw_key = _mapping_key(str(raw_field))
+            field_name = (
+                _infopack_mapping_key(str(raw_field))
+                if dataset_type == "INFOPACK"
+                else raw_key
+            )
             if field_name not in catalog_fields or not raw_header:
                 continue
             configured_fields.add(field_name)
             header = header_lookup.get(_normalize_mapping_value(str(raw_header)))
             if header:
-                selected[field_name] = header
+                if dataset_type == "INFOPACK" and raw_key == "cob":
+                    selected.setdefault(field_name, header)
+                else:
+                    selected[field_name] = header
         return (version, selected, configured_fields) if configured_fields else (None, {}, set())
     version, selected = ranked[0]
     return version, selected, configured_fields_by_version.get(version, set())
@@ -1969,11 +2408,24 @@ def _normalize_requested_mapping(
 ) -> dict[str, str]:
     if not isinstance(mapping, dict):
         raise HTTPException(status_code=422, detail="mapping harus berupa JSON object.")
-    allowed = {field["field_name"] for field in catalog} | VIRTUAL_MAPPING_FIELDS
+    is_infopack = dataset_type.strip().upper() == "INFOPACK"
+    allowed = {
+        field["field_name"]
+        for field in catalog
+        if field.get("default_source") == "column"
+    } | (
+        VIRTUAL_MAPPING_FIELDS - {"cob"}
+        if is_infopack
+        else VIRTUAL_MAPPING_FIELDS
+    )
     header_lookup = {_normalize_mapping_value(header): header for header in headers}
     normalized: dict[str, str] = {}
     for raw_field, raw_header in mapping.items():
-        field = _mapping_key(str(raw_field))
+        field = (
+            _infopack_mapping_key(str(raw_field))
+            if is_infopack
+            else _mapping_key(str(raw_field))
+        )
         if field not in allowed:
             raise HTTPException(
                 status_code=422,
@@ -1987,22 +2439,87 @@ def _normalize_requested_mapping(
                 status_code=422,
                 detail=f"Header '{raw_header}' tidak ditemukan pada sheet.",
             )
+        if field in normalized and normalized[field] != header:
+            label = "Class Code / COB" if is_infopack and field == "class_code" else field
+            raise HTTPException(
+                status_code=422,
+                detail=f"Field '{label}' hanya dapat dipetakan ke satu kolom.",
+            )
         normalized[field] = header
-    if dataset_type == "INFOPACK":
-        if "cob" not in normalized and normalized.get("class_code"):
-            normalized["cob"] = normalized["class_code"]
-        if "class_code" not in normalized and normalized.get("cob"):
-            normalized["class_code"] = normalized["cob"]
     return normalized
 
 
-def _workflow_mapping_status(mapping: dict[str, str], dataset_type: str) -> tuple[bool, list[str]]:
+def _workflow_mapping_status(
+    mapping: dict[str, str],
+    dataset_type: str,
+    workflow_metadata: Optional[dict] = None,
+    required_mapping_fields: Optional[set[str]] = None,
+) -> tuple[bool, list[str]]:
+    required_fields = _workflow_required_fields(dataset_type)
+    if dataset_type == "INFOPACK":
+        canonical_rule_fields = {
+            _infopack_mapping_key(field)
+            for field in (required_mapping_fields or set())
+        }
+        if "class_code" in canonical_rule_fields:
+            required_fields = (*required_fields, "class_code")
     missing = [
         field
-        for field in _workflow_required_fields(dataset_type)
+        for field in required_fields
         if not mapping.get(field)
     ]
+    if dataset_type == "INFOPACK" and not any(
+        mapping.get(field)
+        for alternatives in INFOPACK_REQUIRED_ALTERNATIVES
+        for field in alternatives
+    ):
+        missing.append("infopack_outstanding")
     return not missing, missing
+
+
+def _validate_infopack_mapping_rules(
+    mapping: dict[str, str],
+    rule_mapping: dict[str, str],
+    rule_fields: set[str],
+) -> None:
+    if not rule_fields:
+        return
+    normalized_rule_mapping = {
+        _infopack_mapping_key(str(field)): header
+        for field, header in rule_mapping.items()
+    }
+    normalized_mapping = {
+        _infopack_mapping_key(str(field)): header
+        for field, header in mapping.items()
+    }
+    normalized_rule_fields = {
+        _infopack_mapping_key(field) for field in rule_fields
+    }
+    mismatched_fields = {
+        field
+        for field in normalized_rule_fields
+        if not normalized_rule_mapping.get(field)
+        or _normalize_mapping_value(str(normalized_mapping.get(field) or ""))
+        != _normalize_mapping_value(str(normalized_rule_mapping.get(field) or ""))
+    }
+    if not mismatched_fields:
+        return
+
+    labels = [
+        INFOPACK_FIELD_LABELS.get(field, field)
+        for field in sorted(mismatched_fields)
+    ]
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Header Excel tidak sesuai Mapping Rules aktif untuk field: "
+            + ", ".join(labels)
+        ),
+    )
+
+
+def _is_infopack_summary_sheet(mapping: dict[str, str]) -> bool:
+    return not any(mapping.get(field) for field in ("loss_ref", "dol", "gross"))
 
 
 def _auto_confirm_mapped_sheets(
@@ -2044,6 +2561,19 @@ def _raw_value(data: dict, mapping: dict[str, str], *fields: str) -> str:
         if value is not None and str(value).strip().lower() not in ("", "nan", "none", "-"):
             return str(value).strip()
     return ""
+
+
+def _is_infopack_summary_row(data: dict, mapping: dict[str, str]) -> bool:
+    if _raw_value(data, mapping, "loss_ref"):
+        return False
+    total_pattern = re.compile(r"^(?:grand\s+)?total(?:\b|$)", re.IGNORECASE)
+    for header in set(mapping.values()):
+        if not header:
+            continue
+        value = data.get(header)
+        if value is not None and total_pattern.match(str(value).strip()):
+            return True
+    return False
 
 
 def _read_workflow_raw_rows(
@@ -2617,8 +3147,11 @@ def _has_cedant_result_values(row: dict) -> bool:
     )
 
 
-def _cedant_result_table_name(short_name: str) -> str:
-    return result_table_name(short_name)
+def _cedant_result_table_name(
+    short_name: str,
+    dataset_type: str = "OS CEDANT",
+) -> str:
+    return result_table_name(short_name, dataset_type)
 
 
 def _delete_cedant_result_period(
@@ -2660,6 +3193,7 @@ def _write_cedant_result_rows(
     catalog: list[dict],
     rows: list[tuple[dict, dict, int]],
     replace_period: bool = False,
+    dataset_type: str = "OS CEDANT",
 ) -> tuple[str, int, int]:
     short_name = db.execute(
         text(
@@ -2674,19 +3208,32 @@ def _write_cedant_result_rows(
             detail=f"Short name cedant '{cedant_code}' belum tersedia di master cedant.",
         )
 
-    table_name = _cedant_result_table_name(str(short_name))
+    table_name = _cedant_result_table_name(str(short_name), dataset_type)
+    result_source_mapping = dict(mapping)
+    if dataset_type.strip().upper() == "INFOPACK":
+        if not result_source_mapping.get("class_code") and result_source_mapping.get("cob"):
+            result_source_mapping["class_code"] = result_source_mapping["cob"]
+        result_source_mapping.pop("cob", None)
+    field_data_types = {
+        str(field.get("field_name") or ""): str(field.get("data_type") or "")
+        .strip()
+        .lower()
+        for field in catalog
+    }
     result_mapping = resolve_result_columns(
         db,
         table_name=table_name,
         cedant_code=cedant_code,
-        mapping=mapping,
+        mapping=result_source_mapping,
         catalog=catalog,
+        dataset_type=dataset_type,
     )
     ensure_result_table(
         db,
         table_name=table_name,
         mapping=result_mapping,
         catalog=catalog,
+        dataset_type=dataset_type,
     )
 
     table_columns = {
@@ -2700,7 +3247,7 @@ def _write_cedant_result_rows(
         ).all()
     }
     mapped_columns: dict[str, tuple[str, str]] = {}
-    for field_name, header in mapping.items():
+    for field_name, header in result_source_mapping.items():
         if not header:
             continue
         if field_name == "class_code":
@@ -2803,14 +3350,60 @@ def _write_cedant_result_rows(
             **metadata_values,
             "excel_row_number": int(excel_row),
         }
-        class_code_header = mapping.get("class_code")
+        class_code_header = mapping.get("class_code") or mapping.get("cob")
         if class_code_header:
-            values["class_code"] = source_data.get(class_code_header)
+            values["class_code"] = (
+                normalized.get("class_code") or source_data.get(class_code_header)
+            )
+        else:
+            values["class_code"] = normalized.get("class_code")
         for result_column, (field_name, source_header) in mapped_columns.items():
             if field_name == "outstanding":
                 values[result_column] = normalized.get("outstanding")
-            elif field_name == "dol":
+            elif field_name == "dol" and dataset_type.strip().upper() != "INFOPACK":
                 values[result_column] = normalized.get("dol")
+            elif (
+                dataset_type.strip().upper() == "INFOPACK"
+                and (
+                    field_name == "dol"
+                    or field_data_types.get(field_name) == "date"
+                )
+            ):
+                raw_date = normalized.get(field_name)
+                if raw_date is None:
+                    raw_date = source_data.get(source_header)
+                parsed_date = _parse_dol(raw_date)
+                if (
+                    raw_date is not None
+                    and str(raw_date).strip().lower() not in ("", "nan", "none", "-", "n/a")
+                    and parsed_date is None
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Nilai tanggal '{source_header}' tidak valid pada "
+                            f"baris Excel {excel_row}."
+                        ),
+                    )
+                values[result_column] = parsed_date
+            elif dataset_type.strip().upper() == "INFOPACK" and field_name in {
+                "gross",
+                "surplus_outstanding",
+                "qs_outstanding",
+                "tsi",
+            }:
+                values[result_column] = normalized.get(field_name)
+            elif dataset_type.strip().upper() == "INFOPACK" and field_name in {
+                "insured",
+                "title",
+            }:
+                values[result_column] = normalized.get("title") or source_data.get(
+                    source_header
+                )
+            elif dataset_type.strip().upper() == "INFOPACK" and field_name == "cob":
+                values[result_column] = normalized.get("cob") or source_data.get(
+                    source_header
+                )
             else:
                 values[result_column] = source_data.get(source_header)
         parameters.append(
@@ -2840,17 +3433,28 @@ def _build_workflow_infopack_row(
     context: dict,
     excel_row: int,
 ) -> dict:
-    cob_source = _raw_value(data, mapping, "cob", "class_code")
-    normalized_class_code, normalized_cob = _normalize_cob(db, cob_source)
+    class_code_source = (
+        _raw_value(data, mapping, "class_code")
+        or _raw_value(data, mapping, "cob")
+        or context.get("__cob")
+    )
+    normalized_class_code, normalized_cob = _normalize_cob(
+        db,
+        class_code_source or "",
+    )
     raw_dol = _raw_value(data, mapping, "dol")
     raw_gross = _raw_value(data, mapping, "gross", "value")
     raw_tsi = _raw_value(data, mapping, "tsi")
+    raw_surplus_outstanding = _raw_value(data, mapping, "surplus_outstanding")
+    raw_qs_outstanding = _raw_value(data, mapping, "qs_outstanding")
+    loss_ref = _raw_value(data, mapping, "loss_ref")
     title = _raw_value(data, mapping, "insured", "title")
     raw_value = _raw_value(data, mapping, "value") or raw_gross
     return {
         "cedant_code": context["cedant_code"],
         "class_code": normalized_class_code,
         "title": title or None,
+        "loss_ref": loss_ref or None,
         "value": raw_value or None,
         "row_index": excel_row,
         "month": int(context["reporting_month"]),
@@ -2861,6 +3465,8 @@ def _build_workflow_infopack_row(
         "cob": normalized_cob,
         "gross": _parse_decimal(raw_gross),
         "tsi": _parse_decimal(raw_tsi),
+        "surplus_outstanding": _parse_decimal(raw_surplus_outstanding),
+        "qs_outstanding": _parse_decimal(raw_qs_outstanding),
     }
 
 
@@ -2978,17 +3584,15 @@ def _save_master_upload(
         )
 
     is_infopack = target_table == INFOPACK_TABLE
-    period_rows_replaced = 0
-    replace_period = False
-    period_locked = not is_infopack
-    if not is_infopack:
-        period_rows_replaced, replace_period = _replace_cedant_master_period(
-            db,
-            cedant_code=cedant_code,
-            month=month,
-            year=year,
-            batch_id=batch_id,
-        )
+    period_rows_replaced, replace_period = _replace_cedant_master_period(
+        db,
+        cedant_code=cedant_code,
+        month=month,
+        year=year,
+        batch_id=batch_id,
+        master_table=target_table,
+    )
+    period_locked = True
     stats = (
         _write_infopack_rows(db, list(rows_by_index.values()))
         if is_infopack
@@ -3066,42 +3670,47 @@ def _save_master_upload(
     result_table_name = None
     result_rows_appended = 0
     result_rows_replaced = 0
-    if not is_infopack:
-        result_context = {
-            "cedant_code": cedant_code,
-            "reporting_month": month,
-            "reporting_year": year,
-            "file_name": file_name,
-            "sheet_name": sheet_name,
-        }
-        result_rows = []
-        for index, source_row in enumerate(source_rows):
-            source_data = dict(source_row.get("data") or {})
-            if not source_data:
+    result_context = {
+        "cedant_code": cedant_code,
+        "reporting_month": month,
+        "reporting_year": year,
+        "file_name": file_name,
+        "sheet_name": sheet_name,
+    }
+    result_rows = []
+    for index, source_row in enumerate(source_rows):
+        source_data = dict(source_row.get("data") or {})
+        if not source_data:
+            continue
+        excel_row = int(source_row.get("excel_row", index + 2))
+        if is_infopack:
+            normalized = rows_by_index.get(excel_row)
+            if not normalized:
                 continue
-            excel_row = source_row.get("excel_row", index + 2)
+        else:
             normalized = _build_workflow_cedant_row(
                 source_data, effective_col_map, result_context
             )
             if not _has_cedant_result_values(normalized):
                 continue
-            result_rows.append((source_data, normalized, int(excel_row)))
-        result_table_name, result_rows_appended, result_rows_replaced = _write_cedant_result_rows(
-            db,
-            cedant_code=cedant_code,
-            table_id=table_id,
-            month=month,
-            year=year,
-            file_name=file_name,
-            sheet_name=sheet_name,
-            mapping=effective_col_map,
-            catalog=_load_field_catalog(db, dataset_type),
-            rows=result_rows,
-            replace_period=replace_period,
-        )
-        stats["result_table"] = result_table_name
-        stats["result_rows_appended"] = result_rows_appended
-        stats["result_rows_replaced"] = result_rows_replaced
+        result_rows.append((source_data, normalized, excel_row))
+    result_table_name, result_rows_appended, result_rows_replaced = _write_cedant_result_rows(
+        db,
+        cedant_code=cedant_code,
+        table_id=table_id,
+        month=month,
+        year=year,
+        file_name=file_name,
+        sheet_name=sheet_name,
+        mapping=effective_col_map,
+        catalog=_load_field_catalog(db, dataset_type),
+        rows=result_rows,
+        replace_period=replace_period,
+        dataset_type=dataset_type,
+    )
+    stats["result_table"] = result_table_name
+    stats["result_rows_appended"] = result_rows_appended
+    stats["result_rows_replaced"] = result_rows_replaced
 
     job.sheet_name = sheet_name or job.sheet_name
     job.status = "done"
@@ -3138,26 +3747,37 @@ def _auto_match_headers_for_sheet(
     def has_mapping_rule(*field_names: str) -> bool:
         return any(field_name in rule_fields for field_name in field_names)
 
+    def resolve_header(value: str) -> str:
+        if is_infopack:
+            return _match_infopack_mapping_header(value, columns) or ""
+        return lower_lookup.get(value.strip().lower(), "")
+
     # 1. Coba dari db_col_map terlebih dahulu
     for field_name, excel_col in (db_col_map or {}).items():
         if not excel_col:
             continue
         if "|" in str(excel_col):
             parts = [p.strip() for p in str(excel_col).split("|") if p.strip()]
-            resolved_parts = [lower_lookup.get(p.lower(), "") for p in parts]
+            resolved_parts = [resolve_header(part) for part in parts]
             if all(resolved_parts):
                 matched[field_name] = "|".join(resolved_parts)
         else:
-            found = lower_lookup.get(str(excel_col).strip().lower())
+            found = resolve_header(str(excel_col).strip())
             if found:
                 matched[field_name] = found
 
     # 2. Fallback regex untuk field yang belum terpetakan
     if is_infopack:
-        if not matched.get("class_code") and not has_mapping_rule("class_code", "cob"):
-            m = _match_header_by_patterns(columns, CLASS_CODE_PATTERNS)
+        if not matched.get("loss_ref") and not has_mapping_rule("loss_ref", "doc_no"):
+            m = _match_header_by_patterns(columns, INFOPACK_LOSS_REF_PATTERNS)
             if m:
-                matched["class_code"] = m
+                matched["loss_ref"] = m
+        if not matched.get("insured") and not has_mapping_rule("insured", "title"):
+            m = _match_header_by_patterns(
+                columns, INSURED_PATTERNS + (r"title|uraian|description|nama",)
+            )
+            if m:
+                matched["insured"] = m
         if not matched.get("title") and not has_mapping_rule("title", "insured"):
             m = _match_header_by_patterns(columns, INSURED_PATTERNS + (r"title|uraian|description|nama",))
             if m:
@@ -3167,13 +3787,37 @@ def _auto_match_headers_for_sheet(
             if m:
                 matched["value"] = m
         for field_name, patterns in (
+            ("class_code", CLASS_CODE_PATTERNS),
             ("dol", DOL_PATTERNS),
             ("cob", COB_PATTERNS),
             ("gross", GROSS_PATTERNS),
             ("tsi", TSI_PATTERNS),
+            ("currency", CURRENCY_PATTERNS),
+            ("policy_number", (r"policy\s*(?:no|number|#)", r"policy\s*number")),
+            (
+                "policy_comm_date",
+                (r"policy\s*(?:commencement|comm|inception|start)\s*date",),
+            ),
+            (
+                "policy_expiry_date",
+                (r"policy\s*(?:expiry|expiration|end)\s*date",),
+            ),
+            (
+                "surplus_outstanding",
+                (
+                    r"\bsurplus\b",
+                    r"\bsur\s+plus\b",
+                ),
+            ),
+            (
+                "qs_outstanding",
+                (
+                    r"\b(?:qs|qts)\b",
+                    r"\bquota[\s_-]*share\b",
+                ),
+            ),
         ):
-            aliases = ("class_code",) if field_name == "cob" else ()
-            if not matched.get(field_name) and not has_mapping_rule(field_name, *aliases):
+            if not matched.get(field_name) and not has_mapping_rule(field_name):
                 m = _match_header_by_patterns(columns, patterns)
                 if m:
                     matched[field_name] = m
@@ -3228,6 +3872,13 @@ async def inspect_master_excel(
 
     target_table = _target_table(tipe_data or "OS Cedant")
     is_infopack = target_table == INFOPACK_TABLE
+    dataset_type = _dataset_type(tipe_data or "OS Cedant")
+    catalog = _load_field_catalog(db, dataset_type) if is_infopack else []
+    if is_infopack and not catalog:
+        raise HTTPException(
+            status_code=500,
+            detail="master_field tidak memiliki field untuk dataset INFOPACK.",
+        )
     resolved_cedant = (cedant_code or "").strip()
     if not resolved_cedant and cedant:
         resolved_cedant = _resolve_cedant_code(db, cedant) or ""
@@ -3244,13 +3895,44 @@ async def inspect_master_excel(
             detected_cedant_name = det_name or detected_cedant_name
 
     auto_mappings: dict[str, dict] = {}
+    mapping_rule_fields_by_sheet: dict[str, list[str]] = {}
     for sh, cols in (info.get("sheet_columns") or {}).items():
-        db_col_map = (
-            _load_column_mapping(db, resolved_cedant, sh, is_infopack)
-            if resolved_cedant
-            else {}
-        )
-        auto_mappings[sh] = _auto_match_headers_for_sheet(cols, is_infopack, db_col_map)
+        if is_infopack:
+            _, db_col_map, mapping_rule_fields = (
+                _suggest_existing_mapping(
+                    db,
+                    resolved_cedant,
+                    dataset_type,
+                    sh,
+                    cols,
+                    catalog,
+                    file.filename,
+                )
+                if resolved_cedant
+                else (None, {}, set())
+            )
+            mapping_rule_fields_by_sheet[sh] = sorted(mapping_rule_fields)
+            auto_mappings[sh] = _infopack_rule_mapping(
+                cols,
+                catalog,
+                db_col_map,
+            )
+        else:
+            db_col_map = (
+                _load_column_mapping(
+                    db,
+                    resolved_cedant,
+                    sh,
+                    False,
+                )
+                if resolved_cedant
+                else {}
+            )
+            auto_mappings[sh] = _auto_match_headers_for_sheet(
+                cols,
+                False,
+                db_col_map,
+            )
 
     return {
         "status": "success",
@@ -3265,7 +3947,8 @@ async def inspect_master_excel(
         "sheet_samples": info["sheet_samples"],
         "sheet_row_counts": info["sheet_row_counts"],
         "auto_mappings": auto_mappings,
-        "target_schema": INFOPACK_TARGET_SCHEMA if is_infopack else CEDANT_TARGET_SCHEMA,
+        "mapping_rule_fields_by_sheet": mapping_rule_fields_by_sheet,
+        "target_schema": _target_schema_for_catalog(dataset_type, catalog),
     }
 
 
@@ -3344,6 +4027,7 @@ async def prepare_master_upload(
     db.add(job)
     db.commit()
     db.refresh(job)
+    workflow_metadata = {"__job_id": job.id}
 
     batch_id = None
     try:
@@ -3406,6 +4090,11 @@ async def prepare_master_upload(
         ):
             sheet_index = available_sheets.index(selected_sheet) + 1
             headers = parsed["columns"]
+            sheet_workflow_metadata = dict(workflow_metadata)
+            if dataset_type == "INFOPACK":
+                sheet_cob = (parsed.get("sheet_metadata") or {}).get("cob")
+                if sheet_cob:
+                    sheet_workflow_metadata["__cob"] = sheet_cob
             if not headers:
                 table_id = db.execute(
                     text(
@@ -3419,12 +4108,16 @@ async def prepare_master_upload(
                         "sheet_name": selected_sheet,
                         "sheet_index": sheet_index,
                         "applied_mapping": json.dumps(
-                            {"mapping": {}, "__job_id": job.id},
+                            {"mapping": {}, **sheet_workflow_metadata},
                             ensure_ascii=False,
                         ),
                     },
                 ).scalar_one()
-                _, missing = _workflow_mapping_status({}, dataset_type)
+                _, missing = _workflow_mapping_status(
+                    {},
+                    dataset_type,
+                    required_mapping_fields=set(),
+                )
                 workbook_sheets.append(
                     {
                         "table_id": table_id,
@@ -3450,18 +4143,32 @@ async def prepare_master_upload(
                 selected_sheet,
                 headers,
                 catalog,
+                file_name,
             )
-            auto_map = _auto_mapping_for_catalog(
-                headers,
-                dataset_type,
-                catalog,
-                existing_map,
-                mapping_rule_fields,
-            )
+            if dataset_type == "INFOPACK":
+                auto_map = _infopack_rule_mapping(
+                    headers,
+                    catalog,
+                    existing_map,
+                )
+            else:
+                auto_map = _auto_mapping_for_catalog(
+                    headers,
+                    dataset_type,
+                    catalog,
+                    existing_map,
+                    mapping_rule_fields,
+                )
             proposed_mapping = {**auto_map, **existing_map}
+            is_summary_sheet = (
+                dataset_type == "INFOPACK"
+                and _is_infopack_summary_sheet(proposed_mapping)
+            )
             sheet_status = (
                 "skipped"
-                if selected_sheet == skip_sheet_name or not parsed["total_rows"]
+                if selected_sheet == skip_sheet_name
+                or not parsed["total_rows"]
+                or is_summary_sheet
                 else "needs_review"
             )
             table_id = db.execute(
@@ -3476,7 +4183,7 @@ async def prepare_master_upload(
                     "sheet_name": selected_sheet,
                     "sheet_index": sheet_index,
                     "applied_mapping": json.dumps(
-                        {"mapping": proposed_mapping, "__job_id": job.id},
+                        {"mapping": proposed_mapping, **sheet_workflow_metadata},
                         ensure_ascii=False,
                     ),
                     "status": sheet_status,
@@ -3557,7 +4264,17 @@ async def prepare_master_upload(
                     raw_row_mappings[start : start + 1000],
                 )
             total_rows += parsed["total_rows"]
-            complete, missing = _workflow_mapping_status(proposed_mapping, dataset_type)
+            complete, missing = _workflow_mapping_status(
+                proposed_mapping,
+                dataset_type,
+                sheet_workflow_metadata,
+                mapping_rule_fields,
+            )
+            if dataset_type == "INFOPACK" and mapping_rule_fields:
+                missing_rule_fields = mapping_rule_fields - set(proposed_mapping)
+                if missing_rule_fields:
+                    complete = False
+                    missing = sorted(set(missing) | missing_rule_fields)
             workbook_sheets.append(
                 {
                     "table_id": table_id,
@@ -3677,11 +4394,38 @@ def get_upload_table_mapping(
         table_id=table_id,
     )
     samples = [data for _, data, _ in raw_rows[:5]]
+    current_version, existing_map, current_mapping_rule_fields = (
+        _suggest_existing_mapping(
+            db,
+            context["cedant_code"],
+            dataset_type,
+            context["sheet_name"],
+            headers,
+            catalog,
+            context["file_name"] if dataset_type == "INFOPACK" else None,
+        )
+    )
     field_details = []
     for field in catalog:
+        field_name = field["field_name"]
+        if dataset_type == "INFOPACK" and field_name == "cob":
+            continue
         field_details.append({
             **field,
-            "required": field["field_name"] in _workflow_required_fields(dataset_type),
+            "required": (
+                field_name in _workflow_required_fields(dataset_type)
+                or (
+                    dataset_type == "INFOPACK"
+                    and field_name == "class_code"
+                    and "class_code" in current_mapping_rule_fields
+                )
+            ),
+            "required_any_group": (
+                "infopack_outstanding"
+                if dataset_type == "INFOPACK"
+                and field_name in INFOPACK_REQUIRED_ALTERNATIVES[0]
+                else None
+            ),
             "candidate_headers": [
                 {
                     "header": header,
@@ -3694,28 +4438,6 @@ def get_upload_table_mapping(
                 for header in headers
             ] if field.get("default_source") == "column" else [],
         })
-    if dataset_type == "INFOPACK":
-        field_details.extend([
-            {
-                "field_name": field_name,
-                "field_id": None,
-                "data_type": "text" if field_name == "cob" else "decimal",
-                "default_source": "column",
-                "required": True,
-                "candidate_headers": [
-                    {
-                        "header": header,
-                        "sample_values": [
-                            str(sample[header]).strip()
-                            for sample in samples
-                            if sample.get(header) not in (None, "")
-                        ],
-                    }
-                    for header in headers
-                ],
-            }
-            for field_name in ("cob", "tsi")
-        ])
     stored_mapping = context.get("applied_mapping") or {}
     if isinstance(stored_mapping, str):
         stored_mapping = json.loads(stored_mapping)
@@ -3729,14 +4451,9 @@ def get_upload_table_mapping(
         stored_mapping = stored_mapping["mapping"]
     else:
         stored_mapping = stored_mapping if isinstance(stored_mapping, dict) else {}
-    current_version, existing_map, _ = _suggest_existing_mapping(
-        db,
-        context["cedant_code"],
-        dataset_type,
-        context["sheet_name"],
-        headers,
-        catalog,
-    )
+    if dataset_type == "INFOPACK" and "cob" in stored_mapping:
+        stored_mapping.setdefault("class_code", stored_mapping["cob"])
+        stored_mapping.pop("cob")
     return {
         "table_id": table_id,
         "batch_id": context["batch_id"],
@@ -3798,15 +4515,35 @@ def confirm_upload_table_mapping(
             catalog,
             context["dataset_type"].upper(),
         )
-        complete, missing = _workflow_mapping_status(mapping, context["dataset_type"].upper())
+        if context["dataset_type"].upper() == "INFOPACK":
+            _, rule_mapping, rule_fields = _suggest_existing_mapping(
+                db,
+                context["cedant_code"],
+                "INFOPACK",
+                context["sheet_name"],
+                headers,
+                catalog,
+                context["file_name"],
+            )
+            _validate_infopack_mapping_rules(
+                mapping,
+                rule_mapping,
+                rule_fields,
+            )
+        complete, missing = _workflow_mapping_status(
+            mapping,
+            context["dataset_type"].upper(),
+            workflow_metadata,
+            rule_fields if context["dataset_type"].upper() == "INFOPACK" else None,
+        )
         if not complete:
             labels = {
                 "loss_ref": "Loss Ref / Doc No",
                 "outstanding": "Outstanding",
                 "dol": "DOL",
+                "class_code": "Class Code",
                 "gross": "Gross",
-                "cob": "COB",
-                "tsi": "TSI",
+                "infopack_outstanding": "Surplus Outstanding atau QS Outstanding",
             }
             raise HTTPException(
                 status_code=422,
@@ -3833,11 +4570,14 @@ def confirm_upload_table_mapping(
         normalized_rows = []
         for raw, data, metadata in raw_rows:
             if table == INFOPACK_TABLE:
+                if _is_infopack_summary_row(data, mapping):
+                    continue
+                row_context = {**context, **workflow_metadata}
                 normalized = _build_workflow_infopack_row(
                     db,
                     data,
                     mapping,
-                    context,
+                    row_context,
                     int(metadata["excel_row"]),
                 )
                 mapped_values = [
@@ -3859,23 +4599,55 @@ def confirm_upload_table_mapping(
                     continue
                 normalized_rows.append((raw, normalized))
 
-        period_rows_replaced = 0
+        period_rows_replaced, replace_period = _replace_cedant_master_period(
+            db,
+            cedant_code=context["cedant_code"],
+            month=int(context["reporting_month"]),
+            year=int(context["reporting_year"]),
+            batch_id=context["batch_id"],
+            master_table=table,
+        )
         result_rows_replaced = 0
-        replace_period = False
+        result_table_name = None
+        result_rows_appended = 0
         if table == INFOPACK_TABLE:
-            rows_by_index = {
-                int(row["row_index"]): row for _, row in normalized_rows
-            }
-            _validate_infopack_rows(rows_by_index, row_numbers_are_excel=True)
-            stats = _write_infopack_rows(db, list(rows_by_index.values()))
-        else:
-            period_rows_replaced, replace_period = _replace_cedant_master_period(
+            stats = _write_infopack_rows(
+                db,
+                [row for _, row in normalized_rows],
+            )
+            stats["skipped"] += len(raw_rows) - len(normalized_rows)
+            result_rows = []
+            for raw, normalized in normalized_rows:
+                try:
+                    source_data = json.loads(raw.full_row_data)
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Arsip raw row {raw.id} tidak berisi JSON valid.",
+                    ) from exc
+                metadata = source_data.pop(WORKFLOW_RAW_META_KEY, {})
+                excel_row = metadata.get("excel_row")
+                if excel_row is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Nomor baris Excel tidak tersedia pada raw row {raw.id}.",
+                    )
+                result_rows.append((source_data, normalized, int(excel_row)))
+            result_table_name, result_rows_appended, result_rows_replaced = _write_cedant_result_rows(
                 db,
                 cedant_code=context["cedant_code"],
+                table_id=table_id,
                 month=int(context["reporting_month"]),
                 year=int(context["reporting_year"]),
-                batch_id=context["batch_id"],
+                file_name=context["file_name"],
+                sheet_name=context["sheet_name"],
+                mapping=mapping,
+                catalog=catalog,
+                rows=result_rows,
+                replace_period=replace_period,
+                dataset_type="INFOPACK",
             )
+        else:
             stats = _write_cedant_rows(
                 db,
                 [row for _, row in normalized_rows],
@@ -3979,8 +4751,8 @@ def confirm_upload_table_mapping(
             "rows_replaced": period_rows_replaced,
             "period_replaced": bool(period_rows_replaced or result_rows_replaced),
             "rows_skipped": stats["skipped"],
-            "result_table": result_table_name if table != INFOPACK_TABLE else None,
-            "result_rows_appended": result_rows_appended if table != INFOPACK_TABLE else 0,
+            "result_table": result_table_name,
+            "result_rows_appended": result_rows_appended,
             "result_rows_replaced": result_rows_replaced,
         }
     except HTTPException as exc:
@@ -4211,19 +4983,65 @@ async def upload_to_master(
             if result.get("rows") and result["rows"][0].get("data")
             else []
         )
-        db_col_map = (
-            _load_column_mapping(db, resolved_cedant, sheet_val, is_infopack)
-            if resolved_cedant
-            else {}
-        )
-        auto_col_map = _auto_match_headers_for_sheet(scanned_headers, is_infopack, {})
-        effective_col_map = {**auto_col_map, **db_col_map, **parsed_custom_map}
-
         if is_infopack:
+            infopack_catalog = _load_field_catalog(db, "INFOPACK")
+            _, db_col_map, mapping_rule_fields = (
+                _suggest_existing_mapping(
+                    db,
+                    resolved_cedant,
+                    "INFOPACK",
+                    sheet_val,
+                    scanned_headers,
+                    infopack_catalog,
+                    file.filename,
+                )
+                if resolved_cedant
+                else (None, {}, set())
+            )
+            auto_col_map = _infopack_rule_mapping(
+                scanned_headers,
+                infopack_catalog,
+                db_col_map,
+            )
+            effective_col_map = {**auto_col_map, **db_col_map}
+            if not mapping_rule_fields:
+                effective_col_map.update(parsed_custom_map)
+            _validate_infopack_mapping_rules(
+                effective_col_map,
+                db_col_map,
+                mapping_rule_fields,
+            )
             _validate_infopack_headers(scanned_headers, effective_col_map)
+        else:
+            db_col_map = (
+                _load_column_mapping(
+                    db,
+                    resolved_cedant,
+                    sheet_val,
+                    False,
+                )
+                if resolved_cedant
+                else {}
+            )
+            auto_col_map = _auto_match_headers_for_sheet(
+                scanned_headers,
+                False,
+                {},
+            )
+            effective_col_map = {
+                **auto_col_map,
+                **db_col_map,
+                **parsed_custom_map,
+            }
+        if is_infopack:
             rows_by_index = {}
             for idx, source_row in enumerate(raw_result.get("rows", [])):
                 if not source_row.get("data"):
+                    continue
+                if _is_infopack_summary_row(
+                    source_row["data"],
+                    effective_col_map,
+                ):
                     continue
                 excel_row = source_row.get("excel_row", idx + 2)
                 extracted = _extract_infopack_row(

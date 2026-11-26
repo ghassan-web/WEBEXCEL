@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -24,6 +25,7 @@ from app.routers.master import (
     _raw_primary_key,
     _replace_cedant_master_period,
     _write_cedant_rows,
+    _write_cedant_result_rows,
     add_mapping_version,
     get_column_mappings,
     get_master_data,
@@ -434,14 +436,53 @@ class CedantMasterWriteTests(unittest.TestCase):
             month=1,
             year=2025,
             batch_id=10,
+            master_table="master_os_infopack_web",
         )
 
         self.assertEqual(deleted, (0, False))
         self.assertFalse(
             any(
-                query.startswith("DELETE FROM rekonsiliasi.master_os_cedant_web")
+                query.startswith("DELETE FROM rekonsiliasi.master_os_infopack_web")
                 for query, _ in database.executed
             )
+        )
+
+    def test_infopack_master_replacement_is_scoped_to_cedant_and_period(self):
+        class FakeResult:
+            rowcount = 8
+
+            def scalar_one(self):
+                return False
+
+        class FakeDatabase:
+            def __init__(self):
+                self.executed = []
+
+            def execute(self, query, parameters=None):
+                self.executed.append((str(query), parameters or {}))
+                return FakeResult()
+
+        database = FakeDatabase()
+
+        deleted = _replace_cedant_master_period(
+            database,
+            cedant_code="C001",
+            month=1,
+            year=2025,
+            batch_id=10,
+            master_table="master_os_infopack_web",
+        )
+
+        delete_query, delete_parameters = next(
+            (query, parameters)
+            for query, parameters in database.executed
+            if query.startswith("DELETE FROM rekonsiliasi.master_os_infopack_web")
+        )
+        self.assertEqual(deleted, (8, True))
+        self.assertIn("AND month = :month AND year = :year", delete_query)
+        self.assertEqual(
+            delete_parameters,
+            {"cedant_code": "C001", "month": 1, "year": 2025},
         )
 
     def test_result_table_replacement_is_scoped_to_cedant_and_period(self):
@@ -566,6 +607,14 @@ class CedantResultTableNameTests(unittest.TestCase):
             _cedant_result_table_name("AON B INA"),
             "os_claim_cedant_aon_b_ina",
         )
+        self.assertEqual(
+            _cedant_result_table_name("ACA", "INFOPACK"),
+            "os_claim_infopack_aca",
+        )
+        self.assertEqual(
+            _cedant_result_table_name("AON B INA", "INFOPACK"),
+            "os_claim_infopack_aon_b_ina",
+        )
 
     def test_rejects_empty_or_overlong_table_names(self):
         for short_name in ("", "A" * 60):
@@ -574,6 +623,147 @@ class CedantResultTableNameTests(unittest.TestCase):
                     _cedant_result_table_name(short_name)
 
                 self.assertEqual(raised.exception.status_code, 422)
+
+
+class InfopackResultTableWriteTests(unittest.TestCase):
+    def test_writes_info_pack_fields_to_a_separate_cedant_result_table(self):
+        class FakePreparer:
+            @staticmethod
+            def quote(identifier):
+                return f'"{identifier}"'
+
+        class FakeDialect:
+            identifier_preparer = FakePreparer()
+
+        class FakeBind:
+            dialect = FakeDialect()
+
+        class FakeResult:
+            def __init__(self, *, scalar=None, rows=(), rowcount=1):
+                self._scalar = scalar
+                self._rows = rows
+                self.rowcount = rowcount
+
+            def scalar(self):
+                return self._scalar
+
+            def all(self):
+                return self._rows
+
+        result_columns = (
+            "id", "cedant_code", "class_code", "upload_table_id",
+            "excel_row_number", "reporting_month", "reporting_year",
+            "file_name", "sheet_name", "created_at", "Claim Ref", "DOL",
+            "Gross Amount", "COB", "Surplus OS", "Eff_Date", "Exp_Date",
+        )
+
+        class FakeDatabase:
+            def __init__(self):
+                self.executed = []
+
+            def get_bind(self):
+                return FakeBind()
+
+            def execute(self, query, parameters=None):
+                query_text = str(query)
+                self.executed.append((query_text, parameters or {}))
+                if "SELECT cedant_short_name" in query_text:
+                    return FakeResult(scalar="ACA")
+                if "SELECT column_name FROM information_schema.columns" in query_text:
+                    return FakeResult(rows=[(column,) for column in result_columns])
+                return FakeResult(rowcount=1)
+
+        database = FakeDatabase()
+        mapping = {
+            "loss_ref": "Claim Ref",
+            "class_code": "Class Code",
+            "dol": "DOL",
+            "gross": "Gross Amount",
+            "surplus_outstanding": "Surplus OS",
+            "policy_comm_date": "Eff_Date",
+            "policy_expiry_date": "Exp_Date",
+        }
+        result_mapping = {
+            field: header
+            for field, header in mapping.items()
+            if field != "class_code"
+        }
+        source_data = {
+            "Claim Ref": "CLM-123",
+            "Class Code": "FORM-CODE",
+            "DOL": "14/03/2025",
+            "Gross Amount": "100.00",
+            "Surplus OS": "60.00",
+            "Eff_Date": "2021-02-18 00:00:00",
+            "Exp_Date": "",
+        }
+        normalized = {
+            "class_code": "FORM-CODE",
+            "cob": "ALL BUSINESS",
+            "dol": date(2025, 3, 14),
+            "gross": Decimal("100.00"),
+            "surplus_outstanding": Decimal("60.00"),
+        }
+
+        with (
+            patch(
+                "app.routers.master.resolve_result_columns",
+                return_value=result_mapping,
+            ) as resolve_columns,
+            patch("app.routers.master.ensure_result_table"),
+        ):
+            table_name, inserted, replaced = _write_cedant_result_rows(
+                database,
+                cedant_code="C001",
+                table_id=22,
+                month=3,
+                year=2025,
+                file_name="infopack.xlsx",
+                sheet_name="Claims",
+                mapping=mapping,
+                catalog=[
+                    {"field_name": "policy_comm_date", "data_type": "date"},
+                    {"field_name": "policy_expiry_date", "data_type": "date"},
+                ],
+                rows=[(source_data, normalized, 2)],
+                replace_period=True,
+                dataset_type="INFOPACK",
+            )
+
+        self.assertEqual(table_name, "os_claim_infopack_aca")
+        self.assertEqual((inserted, replaced), (1, 1))
+        resolve_columns.assert_called_once()
+        self.assertEqual(
+            resolve_columns.call_args.kwargs["dataset_type"],
+            "INFOPACK",
+        )
+        self.assertNotIn("cob", resolve_columns.call_args.kwargs["mapping"])
+        self.assertEqual(
+            resolve_columns.call_args.kwargs["mapping"]["class_code"],
+            "Class Code",
+        )
+        insert_sql, parameters = database.executed[-1]
+        self.assertIn('hasil_rekonsiliasi."os_claim_infopack_aca"', insert_sql)
+        delete_query, delete_parameters = next(
+            (query, parameters)
+            for query, parameters in database.executed
+            if query.startswith("DELETE FROM hasil_rekonsiliasi.")
+        )
+        self.assertIn("reporting_month = :month", delete_query)
+        self.assertIn("reporting_year = :year", delete_query)
+        self.assertEqual(
+            delete_parameters,
+            {"cedant_code": "C001", "month": 3, "year": 2025},
+        )
+        row = parameters[0]
+        self.assertEqual(row["value_1"], "FORM-CODE")
+        self.assertEqual(row["value_4"], "CLM-123")
+        self.assertEqual(row["value_5"], date(2025, 3, 14))
+        self.assertEqual(row["value_6"], Decimal("100.00"))
+        self.assertEqual(row["value_7"], Decimal("60.00"))
+        self.assertEqual(row["value_8"], date(2021, 2, 18))
+        self.assertIsNone(row["value_9"])
+        self.assertNotIn('"COB"', insert_sql)
 
 
 class WorkflowCedantValidationTests(unittest.TestCase):
@@ -615,6 +805,18 @@ class CedantMappingProfileTests(unittest.TestCase):
                     return FakeResult(
                         [
                             {
+                                "excel_name": "Claim Reference",
+                                "field_name": "loss_ref",
+                                "argument": {"sheet_names": ["Claims"]},
+                                "mapping_version": 2,
+                            },
+                            {
+                                "excel_name": "Insured Name",
+                                "field_name": "insured",
+                                "argument": {"sheet_names": ["Claims"]},
+                                "mapping_version": 2,
+                            },
+                            {
                                 "excel_name": "Gross Amount",
                                 "field_name": "gross",
                                 "argument": {"sheet_names": ["Claims"]},
@@ -628,10 +830,186 @@ class CedantMappingProfileTests(unittest.TestCase):
 
         result = _load_column_mapping(database, "LC011", "Claims", True)
 
+        self.assertEqual(result["loss_ref"], "Claim Reference")
+        self.assertEqual(result["insured"], "Insured Name")
         self.assertEqual(result["gross"], "Gross Amount")
         self.assertTrue(
             any("FROM rekonsiliasi.master_mapping_column_infopack" in query
                 for query in database.queries)
+        )
+
+    def test_infopack_mapping_loader_does_not_mix_older_versions(self):
+        class FakeResult:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return [
+                    {
+                        "excel_name": "Old Insured",
+                        "field_name": "insured",
+                        "argument": {},
+                        "mapping_version": 1,
+                    },
+                    {
+                        "excel_name": "Claim No.",
+                        "field_name": "loss_ref",
+                        "argument": {},
+                        "mapping_version": 3,
+                    },
+                ]
+
+        class EmptyResult:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return []
+
+        class FakeDatabase:
+            def execute(self, query, *_args, **_kwargs):
+                if "master_mapping_column_infopack" in str(query):
+                    return FakeResult()
+                return EmptyResult()
+
+        result = _load_column_mapping(FakeDatabase(), "LC011", "Claims", True)
+
+        self.assertEqual(result, {"loss_ref": "Claim No."})
+
+    def test_infopack_mapping_loader_selects_active_source_for_file_and_sheet(self):
+        source_rows = [
+            {
+                "excel_name": "Proportional Claim",
+                "field_name": "loss_ref",
+                "argument": {
+                    "source_tables": [
+                        {
+                            "file_name": "InfoPack_Proportional.xlsx",
+                            "sheet_name": "List of big loss",
+                        }
+                    ]
+                },
+                "mapping_version": 1,
+            },
+            {
+                "excel_name": "XOL 2024 Claim",
+                "field_name": "loss_ref",
+                "argument": {
+                    "source_tables": [
+                        {
+                            "file_name": "InfoPack_XOL_2024.xlsx",
+                            "sheet_name": "LIST BIG LOSS",
+                        }
+                    ]
+                },
+                "mapping_version": 2,
+            },
+            {
+                "excel_name": "XOL 2025 Claim",
+                "field_name": "loss_ref",
+                "argument": {
+                    "source_tables": [
+                        {
+                            "file_name": "InfoPack_XOL_2025.xlsx",
+                            "sheet_name": "LIST INDIVIDUAL",
+                        }
+                    ]
+                },
+                "mapping_version": 3,
+            },
+        ]
+
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, *_args, **_kwargs):
+                if "master_mapping_column_infopack" in str(query):
+                    return FakeResult(source_rows)
+                return FakeResult([])
+
+        database = FakeDatabase()
+        self.assertEqual(
+            _load_column_mapping(
+                database,
+                "LB003",
+                "LIST BIG LOSS",
+                True,
+                "InfoPack_XOL_2024.xlsx",
+            ),
+            {"loss_ref": "XOL 2024 Claim"},
+        )
+        self.assertEqual(
+            _load_column_mapping(
+                database,
+                "LB003",
+                "LIST INDIVIDUAL",
+                True,
+                "InfoPack_XOL_2025.xlsx",
+            ),
+            {"loss_ref": "XOL 2025 Claim"},
+        )
+        self.assertEqual(
+            _load_column_mapping(
+                database,
+                "LB003",
+                "List of big loss",
+                True,
+                "InfoPack_Proportional.xlsx",
+            ),
+            {"loss_ref": "Proportional Claim"},
+        )
+        ambiguous_rows = [
+            {
+                "excel_name": "Old Claim",
+                "field_name": "loss_ref",
+                "argument": {
+                    "source_tables": [
+                        {
+                            "file_name": "InfoPack_Proportional.xlsx",
+                            "sheet_name": "LIST BIG LOSS",
+                        }
+                    ]
+                },
+                "mapping_version": 1,
+            },
+            {
+                "excel_name": "XOL Claim",
+                "field_name": "loss_ref",
+                "argument": {
+                    "source_tables": [
+                        {
+                            "file_name": "InfoPack_XOL_2024.xlsx",
+                            "sheet_name": "LIST BIG LOSS",
+                        }
+                    ]
+                },
+                "mapping_version": 2,
+            },
+        ]
+
+        class AmbiguousDatabase:
+            def execute(self, query, *_args, **_kwargs):
+                if "master_mapping_column_infopack" in str(query):
+                    return FakeResult(ambiguous_rows)
+                return FakeResult([])
+
+        self.assertEqual(
+            _load_column_mapping(
+                AmbiguousDatabase(),
+                "LB003",
+                "LIST BIG LOSS",
+                True,
+                "Renamed_InfoPack.xlsx",
+            ),
+            {},
         )
 
     def test_add_infopack_mapping_version_inserts_into_dedicated_table(self):
@@ -790,6 +1168,84 @@ class CedantMappingProfileTests(unittest.TestCase):
             result["mapping_fields"],
         )
 
+    def test_infopack_upload_profile_uses_latest_version_only(self):
+        infopack_rows = [
+            {
+                "cedant_code": "LB003",
+                "cedant_name": "PT ASURANSI BHAKTI BHAYANGKARA",
+                "excel_name": "INSURED",
+                "field_name": "insured",
+                "dataset_type": "INFOPACK",
+                "mapping_version": 1,
+                "argument": {},
+            },
+            {
+                "cedant_code": "LB003",
+                "cedant_name": "PT ASURANSI BHAKTI BHAYANGKARA",
+                "excel_name": "PLA No.",
+                "field_name": "loss_ref",
+                "dataset_type": "INFOPACK",
+                "mapping_version": 3,
+                "argument": {},
+            },
+            {
+                "cedant_code": "LB003",
+                "cedant_name": "PT ASURANSI BHAKTI BHAYANGKARA",
+                "excel_name": "Date of / Loss",
+                "field_name": "dol",
+                "dataset_type": "INFOPACK",
+                "mapping_version": 3,
+                "argument": {},
+            },
+        ]
+
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, *_args, **_kwargs):
+                query_text = str(query)
+                if "SELECT m.cedant_code" in query_text:
+                    return FakeResult(infopack_rows)
+                if "SELECT DISTINCT ON (b.cedant_code" in query_text:
+                    return FakeResult([])
+                if "SELECT field_name, dataset_type" in query_text:
+                    return FakeResult(
+                        [
+                            {
+                                "field_name": field,
+                                "dataset_type": "INFOPACK",
+                                "default_source": "column",
+                            }
+                            for field in ("insured", "loss_ref", "dol")
+                        ]
+                    )
+                if "SELECT DISTINCT ON (cedant_code)" in query_text:
+                    return FakeResult(
+                        [{"cedant_code": "LB003", "cedant_name": "PT ASURANSI BHAKTI BHAYANGKARA"}]
+                    )
+                return FakeResult([])
+
+        result = get_column_mappings(FakeDatabase())
+        profiles = [
+            profile
+            for profile in result["profiles"]
+            if profile["tipe_data"] == "Infopack"
+        ]
+
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(
+            profiles[0]["mapping"],
+            {"doc_no": "PLA No.", "dol": "Date of / Loss"},
+        )
+
     def test_mapping_version_profiles_keep_each_sheet_and_version(self):
         rows = [
             {
@@ -814,6 +1270,31 @@ class CedantMappingProfileTests(unittest.TestCase):
         self.assertEqual(profiles[0]["mapping"]["doc_no"], "DocNo")
         self.assertEqual(profiles[1]["mapping"]["doc_no"], "RefNo")
         self.assertEqual(profiles[0]["sheetNames"], ["Claims"])
+
+    def test_infopack_profiles_use_source_table_sheet_names(self):
+        rows = [
+            {
+                "cedant_code": "LB003",
+                "cedant_name": "LB",
+                "excel_name": "Claim No.",
+                "field_name": "loss_ref",
+                "dataset_type": "INFOPACK",
+                "mapping_version": 2,
+                "argument": {
+                    "source_tables": [
+                        {
+                            "file_name": "InfoPack_XOL_2024.xlsx",
+                            "sheet_name": "LIST BIG LOSS",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        profiles = _build_mapping_version_profiles(rows)
+
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0]["sheetNames"], ["LIST BIG LOSS"])
 
     def test_manual_mapping_accepts_catalog_alias_and_rejects_unknown_fields(self):
         catalog = [
